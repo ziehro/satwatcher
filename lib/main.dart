@@ -7,9 +7,12 @@ import 'package:http/http.dart' as http;
 import 'package:sgp4_sdp4/sgp4_sdp4.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:timezone/data/latest_all.dart' as tz;
+import 'package:timezone/timezone.dart' as tz;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  tz.initializeTimeZones();
   await NotificationService.init();
   runApp(const EMFSatTrackerApp());
 }
@@ -53,14 +56,14 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
   late AnimationController _pulseController;
 
   final Map<String, double> _satellitePower = {
-    'RADAR': 5.0, // SAR satellites - very high power
-    'GPS-OPS': 3.0, // GPS - medium-high power
+    'RADAR': 5.0,
+    'GPS-OPS': 3.0,
     'GALILEO': 3.0,
     'BEIDOU': 3.0,
     'GLONASS-OPS': 3.0,
-    'TDRSS': 4.5, // Very high power relay
+    'TDRSS': 4.5,
     'SARSAT': 2.5,
-    'GOES': 3.5, // Weather radar
+    'GOES': 3.5,
     'MUSSON': 3.5,
   };
 
@@ -212,12 +215,12 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     List<SatellitePass> passes = [];
     final now = DateTime.now();
     const hoursAhead = 72;
-    const zenithThreshold = 80.0; // Within 10° of zenith
+    const zenithThreshold = 80.0;
 
     for (var sat in satellites) {
       try {
         final tle = TLE(sat.name, sat.tle1, sat.tle2);
-        final satellite = Satellite(tle);
+        final orbit = Orbit(tle);
 
         bool inPass = false;
         DateTime? passStart;
@@ -227,19 +230,39 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
 
         for (int minutes = 0; minutes < hoursAhead * 60; minutes++) {
           final time = now.add(Duration(minutes: minutes));
-          final julianDate = _toJulianDate(time);
 
           try {
-            final satPos = satellite.getPosition(julianDate);
-            final obsPos = CoordGeodetic(
-              _currentPosition!.latitude,
-              _currentPosition!.longitude,
-              0.1,
+            // Calculate Julian date
+            final jd = Julian.fromFullDate(
+              time.year,
+              time.month,
+              time.day,
+              time.hour,
+              time.minute,
+            ).getDate();
+
+            // Get satellite position in minutes since epoch
+            final minutesSinceEpoch = (jd - orbit.epoch().getDate()) * MIN_PER_DAY;
+            final eciPos = orbit.getPosition(minutesSinceEpoch);
+
+            // Convert to geographic coordinates
+            final satGeo = eciPos.toGeo();
+
+            // Calculate look angle from observer
+            final obsLat = deg2rad(_currentPosition!.latitude);
+            final obsLon = deg2rad(_currentPosition!.longitude);
+            final obsAlt = 0.1; // km
+
+            final lookAngle = _calculateLookAngle(
+              satGeo,
+              obsLat,
+              obsLon,
+              obsAlt,
+              time,
             );
 
-            final lookAngle = satPos.getLookAngle(obsPos);
-            final elevation = lookAngle.elevationDeg;
-            final azimuth = lookAngle.azimuthDeg;
+            final elevation = lookAngle['elevation']!;
+            final azimuth = lookAngle['azimuth']!;
 
             if (elevation >= zenithThreshold && !inPass) {
               inPass = true;
@@ -291,25 +314,49 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     return passes;
   }
 
-  double _toJulianDate(DateTime dateTime) {
-    final a = (14 - dateTime.month) ~/ 12;
-    final y = dateTime.year + 4800 - a;
-    final m = dateTime.month + 12 * a - 3;
+  Map<String, double> _calculateLookAngle(
+      CoordGeo satGeo,
+      double obsLat,
+      double obsLon,
+      double obsAlt,
+      DateTime time,
+      ) {
+    // Convert satellite position to topocentric coordinates
+    double satLat = satGeo.lat;
+    double satLon = satGeo.lon;
+    if (satLon > PI) satLon -= TWOPI;
+    double satAlt = satGeo.alt;
 
-    var jdn = dateTime.day +
-        (153 * m + 2) ~/ 5 +
-        365 * y +
-        y ~/ 4 -
-        y ~/ 100 +
-        y ~/ 400 -
-        32045;
+    // Calculate range vector
+    final dx = (satAlt + 6378.137) * cos(satLat) * cos(satLon) -
+        (obsAlt + 6378.137) * cos(obsLat) * cos(obsLon);
+    final dy = (satAlt + 6378.137) * cos(satLat) * sin(satLon) -
+        (obsAlt + 6378.137) * cos(obsLat) * sin(obsLon);
+    final dz = (satAlt + 6378.137) * sin(satLat) - (obsAlt + 6378.137) * sin(obsLat);
 
-    final hour = dateTime.hour +
-        dateTime.minute / 60.0 +
-        dateTime.second / 3600.0 +
-        dateTime.millisecond / 3600000.0;
+    // Calculate range
+    final range = sqrt(dx * dx + dy * dy + dz * dz);
 
-    return jdn + (hour - 12) / 24.0;
+    // Calculate elevation
+    final elevation = asin(
+      ((dx * cos(obsLat) * cos(obsLon) +
+          dy * cos(obsLat) * sin(obsLon) +
+          dz * sin(obsLat)) /
+          range),
+    );
+
+    // Calculate azimuth
+    final azimuth = atan2(
+      (dx * sin(obsLon) - dy * cos(obsLon)),
+      (-dx * sin(obsLat) * cos(obsLon) -
+          dy * sin(obsLat) * sin(obsLon) +
+          dz * cos(obsLat)),
+    );
+
+    return {
+      'elevation': rad2deg(elevation),
+      'azimuth': rad2deg(azimuth < 0 ? azimuth + TWOPI : azimuth),
+    };
   }
 
   void _scheduleNotifications(List<SatellitePass> passes) {
@@ -530,8 +577,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.satellite_alt,
-                size: 64, color: Colors.grey.shade700),
+            Icon(Icons.satellite_alt, size: 64, color: Colors.grey.shade700),
             const SizedBox(height: 16),
             Text(
               _passes.isEmpty
@@ -670,7 +716,6 @@ class RadarPainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
     final maxRadius = min(size.width, size.height) / 2;
 
-    // Draw radar circles
     for (int i = 1; i <= 3; i++) {
       final paint = Paint()
         ..color = Colors.cyanAccent.withOpacity(0.2)
@@ -679,7 +724,6 @@ class RadarPainter extends CustomPainter {
       canvas.drawCircle(center, maxRadius * i / 3, paint);
     }
 
-    // Draw rotating sweep
     final sweepPaint = Paint()
       ..shader = RadialGradient(
         colors: [
@@ -700,7 +744,6 @@ class RadarPainter extends CustomPainter {
 
     canvas.drawPath(sweepPath, sweepPaint);
 
-    // Draw targets (satellites)
     for (int i = 0; i < targetCount && i < 5; i++) {
       final angle = (i / 5) * 2 * pi;
       final radius = maxRadius * 0.7;
@@ -710,8 +753,7 @@ class RadarPainter extends CustomPainter {
       );
 
       final targetPaint = Paint()
-        ..color = Colors.red
-            .withOpacity(0.5 + 0.5 * sin(pulseValue * 2 * pi));
+        ..color = Colors.red.withOpacity(0.5 + 0.5 * sin(pulseValue * 2 * pi));
       canvas.drawCircle(targetPos, 4, targetPaint);
     }
   }
@@ -725,8 +767,7 @@ class NotificationService {
   FlutterLocalNotificationsPlugin();
 
   static Future<void> init() async {
-    const androidSettings =
-    AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosSettings = DarwinInitializationSettings();
 
     const settings = InitializationSettings(
@@ -757,11 +798,13 @@ class NotificationService {
       iOS: iosDetails,
     );
 
+    final tzScheduledTime = tz.TZDateTime.from(scheduledTime, tz.local);
+
     await _notifications.zonedSchedule(
       scheduledTime.millisecondsSinceEpoch ~/ 1000,
       title,
       body,
-      scheduledTime.toLocal(),
+      tzScheduledTime,
       details,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       uiLocalNotificationDateInterpretation:
