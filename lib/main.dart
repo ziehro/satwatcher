@@ -141,6 +141,9 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       if (_currentPosition == null) return;
     }
 
+    // Request notification permission (Android 13+)
+    await NotificationService.requestPermissions();
+
     setState(() {
       _isLoading = true;
       _statusMessage = 'Loading satellites...';
@@ -361,11 +364,15 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
 
   void _scheduleNotifications(List<SatellitePass> passes) {
     for (var pass in passes.take(20)) {
-      final notifTime = pass.start.subtract(const Duration(minutes: 5));
+      // Calculate time of max elevation (midpoint between start and end)
+      final passDuration = pass.end.difference(pass.start);
+      final maxElevationTime = pass.start.add(Duration(milliseconds: passDuration.inMilliseconds ~/ 2));
+
+      final notifTime = maxElevationTime.subtract(const Duration(minutes: 5));
       if (notifTime.isAfter(DateTime.now())) {
         NotificationService.scheduleNotification(
           pass.name,
-          'High-power satellite passing overhead in 5 minutes!\nElevation: ${pass.maxElevation.toStringAsFixed(1)}°',
+          'High-power satellite at max elevation in 5 minutes!\nPower: ${pass.power.toStringAsFixed(1)}/5.0 | Elevation: ${pass.maxElevation.toStringAsFixed(1)}°',
           notifTime,
         );
       }
@@ -776,6 +783,13 @@ class NotificationService {
     );
 
     await _notifications.initialize(settings);
+  }
+
+  static Future<void> requestPermissions() async {
+    await _notifications
+        .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>()
+        ?.requestNotificationsPermission();
   }
 
   static Future<void> scheduleNotification(
