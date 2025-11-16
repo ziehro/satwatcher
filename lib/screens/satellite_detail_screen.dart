@@ -29,7 +29,9 @@ class _SatelliteDetailScreenState extends State<SatelliteDetailScreen> {
     super.initState();
     _updatePosition();
     _updateTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
-      _updatePosition();
+      if (mounted) {
+        _updatePosition();
+      }
     });
   }
 

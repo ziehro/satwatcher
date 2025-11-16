@@ -52,7 +52,14 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     _pulseController.dispose();
     super.dispose();
   }
-
+  void _startUpdateTimer() {
+    _updateTimer?.cancel();
+    _updateTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
+      if (mounted) {
+        setState(() {});
+      }
+    });
+  }
   Future<void> _loadPreferences() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
@@ -232,13 +239,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       }
     }
   }
-
-  void _startUpdateTimer() {
-    _updateTimer?.cancel();
-    _updateTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
-      setState(() {});
-    });
-  }
+  
 
   List<SatellitePass> get _filteredPasses {
     return _passes.where((pass) {
