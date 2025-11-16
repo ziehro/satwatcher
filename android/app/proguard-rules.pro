@@ -1,0 +1,3 @@
+-keep class j$.util.** { *; }
+-dontwarn j$.util.**
+-keep class java.util.** { *; }
