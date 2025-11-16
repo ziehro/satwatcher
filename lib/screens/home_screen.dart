@@ -1,0 +1,580 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../models/satellite_data.dart';
+import '../models/satellite_pass.dart';
+import '../services/satellite_service.dart';
+import '../services/notification_service.dart';
+import '../widgets/radar_painter.dart';
+import 'satellite_detail_screen.dart';
+
+class SatelliteTrackerHome extends StatefulWidget {
+  const SatelliteTrackerHome({Key? key}) : super(key: key);
+
+  @override
+  State<SatelliteTrackerHome> createState() => _SatelliteTrackerHomeState();
+}
+
+class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
+    with TickerProviderStateMixin {
+  Position? _currentPosition;
+  List<SatellitePass> _passes = [];
+  bool _isLoading = false;
+  String _statusMessage = 'Tap to start tracking';
+  double _powerThreshold = 1.0;
+  double _zenithThreshold = 80.0;
+  int _hoursAhead = 72;
+  Set<String> _selectedTypes = {'ALL'};
+  Timer? _updateTimer;
+  late AnimationController _radarController;
+  late AnimationController _pulseController;
+
+  @override
+  void initState() {
+    super.initState();
+    _radarController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 3),
+    )..repeat();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat();
+    _loadPreferences();
+  }
+
+  @override
+  void dispose() {
+    _updateTimer?.cancel();
+    _radarController.dispose();
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _powerThreshold = prefs.getDouble('powerThreshold') ?? 1.0;
+      _zenithThreshold = prefs.getDouble('zenithThreshold') ?? 80.0;
+      _hoursAhead = prefs.getInt('hoursAhead') ?? 72;
+    });
+  }
+
+  Future<void> _savePreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('powerThreshold', _powerThreshold);
+    await prefs.setDouble('zenithThreshold', _zenithThreshold);
+    await prefs.setInt('hoursAhead', _hoursAhead);
+  }
+
+  Future<void> _showTrackingOptions() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Tracking Options'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Zenith Threshold: ${_zenithThreshold.toInt()}°'),
+              Slider(
+                value: _zenithThreshold,
+                min: 70.0,
+                max: 90.0,
+                divisions: 20,
+                label: '${_zenithThreshold.toInt()}°',
+                onChanged: (value) {
+                  setDialogState(() => _zenithThreshold = value);
+                  setState(() => _zenithThreshold = value);
+                },
+              ),
+              const SizedBox(height: 16),
+              Text('Hours Ahead: $_hoursAhead'),
+              Slider(
+                value: _hoursAhead.toDouble(),
+                min: 24,
+                max: 168,
+                divisions: 6,
+                label: '$_hoursAhead hrs',
+                onChanged: (value) {
+                  setDialogState(() => _hoursAhead = value.toInt());
+                  setState(() => _hoursAhead = value.toInt());
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                _savePreferences();
+                Navigator.pop(context, true);
+              },
+              child: const Text('Track'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (result == true) {
+      _loadSatellites();
+    }
+  }
+
+  Future<void> _getCurrentLocation() async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        setState(() {
+          _statusMessage = 'Location services disabled';
+        });
+        return;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          setState(() {
+            _statusMessage = 'Location permission denied';
+          });
+          return;
+        }
+      }
+
+      final position = await Geolocator.getCurrentPosition();
+      setState(() {
+        _currentPosition = position;
+        _statusMessage =
+        'Location: ${position.latitude.toStringAsFixed(4)}°, ${position.longitude.toStringAsFixed(4)}°';
+      });
+    } catch (e) {
+      setState(() {
+        _statusMessage = 'Error getting location: $e';
+      });
+    }
+  }
+
+  Future<void> _loadSatellites() async {
+    if (_currentPosition == null) {
+      await _getCurrentLocation();
+      if (_currentPosition == null) return;
+    }
+
+    await NotificationService.requestPermissions();
+
+    setState(() {
+      _isLoading = true;
+      _statusMessage = 'Loading satellites...';
+    });
+
+    try {
+      final categories = [
+        'radar',
+        'gps-ops',
+        'galileo',
+        'beidou',
+        'glonass-ops',
+        'tdrss',
+        'sarsat',
+        'goes',
+        'musson'
+      ];
+
+      List<SatelliteData> allSatellites = [];
+      for (var category in categories) {
+        final sats = await SatelliteService.fetchTLEs(category);
+        allSatellites.addAll(sats);
+      }
+
+      final passes = SatelliteService.calculatePasses(
+        allSatellites,
+        _currentPosition!,
+        _zenithThreshold,
+        _hoursAhead,
+      );
+
+      setState(() {
+        _passes = passes;
+        _isLoading = false;
+        _statusMessage = 'Found ${passes.length} passes';
+      });
+
+      _scheduleNotifications(passes);
+      _startUpdateTimer();
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+        _statusMessage = 'Error: $e';
+      });
+    }
+  }
+
+  void _scheduleNotifications(List<SatellitePass> passes) {
+    for (var pass in passes.take(20)) {
+      final passDuration = pass.end.difference(pass.start);
+      final maxElevationTime = pass.start
+          .add(Duration(milliseconds: passDuration.inMilliseconds ~/ 2));
+
+      final notifTime = maxElevationTime.subtract(const Duration(minutes: 5));
+      if (notifTime.isAfter(DateTime.now())) {
+        NotificationService.scheduleNotification(
+          pass.name,
+          'High-power satellite at max elevation in 5 minutes!\nPower: ${pass.power.toStringAsFixed(1)}/5.0 | Elevation: ${pass.maxElevation.toStringAsFixed(1)}°',
+          notifTime,
+        );
+      }
+    }
+  }
+
+  void _startUpdateTimer() {
+    _updateTimer?.cancel();
+    _updateTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
+      setState(() {});
+    });
+  }
+
+  List<SatellitePass> get _filteredPasses {
+    return _passes.where((pass) {
+      final powerOk = pass.power >= _powerThreshold;
+      final typeOk =
+          _selectedTypes.contains('ALL') || _selectedTypes.contains(pass.category);
+      return powerOk && typeOk;
+    }).take(10).toList();
+  }
+
+  String _getDirection(double azimuth) {
+    const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+    final index = ((azimuth + 22.5) / 45).floor() % 8;
+    return '${directions[index]} (${azimuth.toStringAsFixed(0)}°)';
+  }
+
+  Color _getPowerColor(double power) {
+    if (power >= 4.5) return Colors.red;
+    if (power >= 3.5) return Colors.orange;
+    if (power >= 2.5) return Colors.yellow;
+    return Colors.green;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Colors.deepPurple.shade900,
+              Colors.black,
+              Colors.indigo.shade900,
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: Column(
+            children: [
+              _buildHeader(),
+              _buildRadarAnimation(),
+              _buildFilters(),
+              Expanded(child: _buildPassList()),
+            ],
+          ),
+        ),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _isLoading ? null : _showTrackingOptions,
+        icon: _isLoading
+            ? const SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        )
+            : const Icon(Icons.satellite_alt),
+        label: Text(_isLoading ? 'Loading...' : 'Track Satellites'),
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.radar, size: 32, color: Colors.cyanAccent),
+              const SizedBox(width: 12),
+              const Text(
+                'EMF Satellite Tracker',
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _statusMessage,
+            style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRadarAnimation() {
+    return SizedBox(
+      height: 150,
+      child: AnimatedBuilder(
+        animation: _radarController,
+        builder: (context, child) {
+          return CustomPaint(
+            painter: RadarPainter(
+              _radarController.value,
+              _pulseController.value,
+              _filteredPasses.isEmpty ? 0 : _filteredPasses.length,
+            ),
+            size: const Size(double.infinity, 150),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildFilters() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'EMF Power Threshold',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: Slider(
+                  value: _powerThreshold,
+                  min: 1.0,
+                  max: 5.0,
+                  divisions: 8,
+                  label: _powerThreshold.toStringAsFixed(1),
+                  onChanged: (value) {
+                    setState(() {
+                      _powerThreshold = value;
+                    });
+                    _savePreferences();
+                  },
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: _getPowerColor(_powerThreshold),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  _powerThreshold.toStringAsFixed(1),
+                  style: const TextStyle(
+                    color: Colors.black,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: [
+              FilterChip(
+                label: const Text('ALL'),
+                selected: _selectedTypes.contains('ALL'),
+                onSelected: (selected) {
+                  setState(() {
+                    if (selected) {
+                      _selectedTypes = {'ALL'};
+                    }
+                  });
+                },
+              ),
+              ...['RADAR', 'GPS-OPS', 'TDRSS', 'GOES'].map((type) {
+                return FilterChip(
+                  label: Text(type),
+                  selected: _selectedTypes.contains(type),
+                  onSelected: (selected) {
+                    setState(() {
+                      _selectedTypes.remove('ALL');
+                      if (selected) {
+                        _selectedTypes.add(type);
+                      } else {
+                        _selectedTypes.remove(type);
+                        if (_selectedTypes.isEmpty) {
+                          _selectedTypes.add('ALL');
+                        }
+                      }
+                    });
+                  },
+                );
+              }).toList(),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPassList() {
+    if (_filteredPasses.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.satellite_alt, size: 64, color: Colors.grey.shade700),
+            const SizedBox(height: 16),
+            Text(
+              _passes.isEmpty
+                  ? 'No passes calculated yet'
+                  : 'No passes match your filters',
+              style: TextStyle(color: Colors.grey.shade400),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: _filteredPasses.length,
+      itemBuilder: (context, index) {
+        final pass = _filteredPasses[index];
+        final timeUntil = pass.start.difference(DateTime.now());
+        final isImminent = timeUntil.inMinutes < 30;
+
+        return GestureDetector(
+          onTap: () {
+            if (_currentPosition != null) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => SatelliteDetailScreen(
+                    pass: pass,
+                    observerPosition: _currentPosition!,
+                  ),
+                ),
+              );
+            }
+          },
+          child: Card(
+            color: isImminent
+                ? Colors.red.shade900.withOpacity(0.3)
+                : Colors.white.withOpacity(0.1),
+            margin: const EdgeInsets.only(bottom: 12),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: _getPowerColor(pass.power),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          pass.name,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      const Icon(Icons.chevron_right),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    pass.category,
+                    style: TextStyle(
+                      color: Colors.cyanAccent.shade400,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const Divider(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            DateFormat('MMM dd, hh:mm a').format(pass.start),
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          Text(
+                            timeUntil.inMinutes < 60
+                                ? 'in ${timeUntil.inMinutes}m'
+                                : 'in ${timeUntil.inHours}h ${timeUntil.inMinutes % 60}m',
+                            style: TextStyle(
+                              color: isImminent
+                                  ? Colors.red.shade300
+                                  : Colors.grey.shade400,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            '${pass.maxElevation.toStringAsFixed(1)}°',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            _getDirection(pass.azimuth),
+                            style: TextStyle(
+                              color: Colors.grey.shade400,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(
+                    value: pass.power / 5.0,
+                    backgroundColor: Colors.grey.shade800,
+                    valueColor:
+                    AlwaysStoppedAnimation(_getPowerColor(pass.power)),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'EMF Power: ${pass.power.toStringAsFixed(1)}/5.0',
+                    style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
