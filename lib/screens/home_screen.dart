@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
@@ -43,6 +44,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       duration: const Duration(milliseconds: 1500),
     )..repeat();
     _loadPreferences();
+    _loadStoredPasses();
   }
 
   @override
@@ -52,6 +54,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     _pulseController.dispose();
     super.dispose();
   }
+
   void _startUpdateTimer() {
     _updateTimer?.cancel();
     _updateTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
@@ -60,6 +63,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       }
     });
   }
+
   Future<void> _loadPreferences() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
@@ -74,6 +78,60 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     await prefs.setDouble('powerThreshold', _powerThreshold);
     await prefs.setDouble('zenithThreshold', _zenithThreshold);
     await prefs.setInt('hoursAhead', _hoursAhead);
+  }
+
+  Future<void> _loadStoredPasses() async {
+    final prefs = await SharedPreferences.getInstance();
+    final passesJson = prefs.getString('satellite_passes');
+    final posLat = prefs.getDouble('position_lat');
+    final posLon = prefs.getDouble('position_lon');
+
+    if (passesJson != null && posLat != null && posLon != null) {
+      try {
+        final List<dynamic> decoded = jsonDecode(passesJson);
+        final passes = decoded.map((e) => SatellitePass.fromJson(e)).toList();
+
+        // Filter out expired passes
+        final now = DateTime.now();
+        final validPasses = passes.where((p) => p.end.isAfter(now)).toList();
+
+        if (validPasses.isNotEmpty) {
+          setState(() {
+            _passes = validPasses;
+            _currentPosition = Position(
+              latitude: posLat,
+              longitude: posLon,
+              timestamp: DateTime.now(),
+              accuracy: 0,
+              altitude: 0,
+              heading: 0,
+              speed: 0,
+              speedAccuracy: 0,
+              altitudeAccuracy: 0,
+              headingAccuracy: 0,
+            );
+            _statusMessage = 'Loaded ${validPasses.length} stored passes';
+          });
+
+          // Reschedule notifications for loaded passes
+          _scheduleNotifications(validPasses);
+          _startUpdateTimer();
+        }
+      } catch (e) {
+        // Ignore errors loading stored data
+      }
+    }
+  }
+
+  Future<void> _saveStoredPasses() async {
+    final prefs = await SharedPreferences.getInstance();
+    final passesJson = jsonEncode(_passes.map((e) => e.toJson()).toList());
+    await prefs.setString('satellite_passes', passesJson);
+
+    if (_currentPosition != null) {
+      await prefs.setDouble('position_lat', _currentPosition!.latitude);
+      await prefs.setDouble('position_lon', _currentPosition!.longitude);
+    }
   }
 
   Future<void> _showTrackingOptions() async {
@@ -213,6 +271,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
         _statusMessage = 'Found ${passes.length} passes';
       });
 
+      await _saveStoredPasses();
       _scheduleNotifications(passes);
       _startUpdateTimer();
     } catch (e) {
@@ -239,7 +298,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       }
     }
   }
-  
+
 
   List<SatellitePass> get _filteredPasses {
     return _passes.where((pass) {
