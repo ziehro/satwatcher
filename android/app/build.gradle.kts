@@ -38,11 +38,12 @@ android {
 }
 
 dependencies {
+    // Core library desugaring is required because isCoreLibraryDesugaringEnabled is set to true above
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
 
+    // MOVED: This line must be inside the dependencies block
+    implementation("androidx.work:work-runtime:2.9.0")
 }
-
-implementation("androidx.work:work-runtime:2.9.0")
 
 flutter {
     source = "../.."

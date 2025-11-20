@@ -8,6 +8,7 @@ import '../models/satellite_data.dart';
 import '../models/satellite_pass.dart';
 import '../services/satellite_service.dart';
 import '../services/notification_service.dart';
+import '../services/widget_service.dart';
 import '../widgets/radar_painter.dart';
 import 'satellite_detail_screen.dart';
 
@@ -79,6 +80,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     double totalExposure = 0.0;
     int activeCount = 0;
     final now = DateTime.now();
+    String nextPassInfo = "No upcoming passes";
 
     for (var pass in _passes) {
       // Check if satellite is currently overhead
@@ -111,10 +113,32 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       }
     }
 
+    // Find next pass
+    for (var pass in _passes) {
+      if (pass.start.isAfter(now)) {
+        final timeUntil = pass.start.difference(now);
+        if (timeUntil.inMinutes < 60) {
+          nextPassInfo = "${pass.name} in ${timeUntil.inMinutes}m";
+        } else {
+          nextPassInfo = "${pass.name} in ${timeUntil.inHours}h ${timeUntil.inMinutes % 60}m";
+        }
+        break;
+      }
+    }
+
     setState(() {
       _totalEMFExposure = totalExposure;
       _activePassCount = activeCount;
     });
+
+    // Update widget
+    final percentOfLimit = (totalExposure / 10000.0) * 100;
+    WidgetService.updateWidget(
+      emfValue: totalExposure,
+      satCount: activeCount,
+      percentLimit: percentOfLimit,
+      nextPass: nextPassInfo,
+    );
   }
 
   Future<void> _loadPreferences() async {
@@ -134,7 +158,6 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       });
     } catch (e) {
       print('Error loading preferences: $e');
-      // Use defaults if loading fails
     }
   }
 
@@ -153,7 +176,6 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       await prefs.setInt('hoursAhead', _hoursAhead);
     } catch (e) {
       print('Error saving preferences: $e');
-      // Don't block the UI - just log the error
     }
   }
 
@@ -197,14 +219,12 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
             _statusMessage = 'Loaded ${validPasses.length} stored passes';
           });
 
-          // Reschedule notifications for loaded passes (don't await)
           _scheduleNotifications(validPasses);
           _startUpdateTimer();
         }
       }
     } catch (e) {
       print('Error loading stored passes: $e');
-      // Don't block the UI - just log the error
     }
   }
 
@@ -227,7 +247,6 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       }
     } catch (e) {
       print('Error saving stored passes: $e');
-      // Don't block the UI - just log the error
     }
   }
 
@@ -388,7 +407,6 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
   }
 
   void _scheduleNotifications(List<SatellitePass> passes) {
-    // Schedule in background - don't block UI
     Future.microtask(() async {
       try {
         for (var pass in passes.take(20)) {
@@ -421,12 +439,6 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     }).take(10).toList();
   }
 
-  String _getDirection(double azimuth) {
-    const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-    final index = ((azimuth + 22.5) / 45).floor() % 8;
-    return '${directions[index]} (${azimuth.toStringAsFixed(0)}°)';
-  }
-
   Color _getPowerColor(double power) {
     if (power >= 4.5) return Colors.red;
     if (power >= 3.5) return Colors.orange;
@@ -450,13 +462,20 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
           ),
         ),
         child: SafeArea(
-          child: Column(
-            children: [
-              _buildHeader(),
-              _buildRadarAnimation(),
-              _buildLiveEMFDisplay(),
-              _buildFilters(),
-              Expanded(child: _buildPassList()),
+          // CHANGED: Switched to CustomScrollView to prevent overflow
+          child: CustomScrollView(
+            slivers: [
+              SliverToBoxAdapter(
+                child: Column(
+                  children: [
+                    _buildHeader(),
+                    _buildRadarAnimation(),
+                    _buildLiveEMFDisplay(),
+                    _buildFilters(),
+                  ],
+                ),
+              ),
+              _buildPassListSliver(),
             ],
           ),
         ),
@@ -541,7 +560,6 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
             itemCount: pending.length,
             itemBuilder: (context, index) {
               final notification = pending[index];
-              // Convert notification ID back to timestamp
               final scheduledTime = DateTime.fromMillisecondsSinceEpoch(
                 notification.id * 1000,
               );
@@ -597,7 +615,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
                         notification.id,
                       );
                       Navigator.pop(context);
-                      _checkNotifications(); // Refresh the dialog
+                      _checkNotifications();
                     },
                   ),
                 ),
@@ -609,39 +627,14 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
           if (pending.isNotEmpty)
             TextButton.icon(
               onPressed: () async {
-                final confirm = await showDialog<bool>(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('Delete All Notifications?'),
-                    content: Text(
-                      'This will cancel all ${pending.length} scheduled notifications.',
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, false),
-                        child: const Text('Cancel'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, true),
-                        style: TextButton.styleFrom(
-                          foregroundColor: Colors.red,
-                        ),
-                        child: const Text('Delete All'),
-                      ),
-                    ],
+                await NotificationService.cancelAllNotifications();
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('All notifications cancelled'),
+                    duration: Duration(seconds: 2),
                   ),
                 );
-
-                if (confirm == true && mounted) {
-                  await NotificationService.cancelAllNotifications();
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('All notifications cancelled'),
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-                }
               },
               icon: const Icon(Icons.delete_sweep),
               label: const Text('Delete All'),
@@ -879,151 +872,153 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     );
   }
 
-  Widget _buildPassList() {
+  // CHANGED: Refactored to work with CustomScrollView (SliverList)
+  Widget _buildPassListSliver() {
     if (_filteredPasses.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.satellite_alt, size: 64, color: Colors.grey.shade700),
-            const SizedBox(height: 16),
-            Text(
-              _passes.isEmpty
-                  ? 'No passes calculated yet'
-                  : 'No passes match your filters',
-              style: TextStyle(color: Colors.grey.shade400),
-            ),
-          ],
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.satellite_alt, size: 64, color: Colors.grey.shade700),
+              const SizedBox(height: 16),
+              Text(
+                _passes.isEmpty
+                    ? 'No passes calculated yet'
+                    : 'No passes match your filters',
+                style: TextStyle(color: Colors.grey.shade400),
+              ),
+            ],
+          ),
         ),
       );
     }
 
-    return ListView.builder(
+    return SliverPadding(
       padding: const EdgeInsets.all(16),
-      itemCount: _filteredPasses.length,
-      itemBuilder: (context, index) {
-        final pass = _filteredPasses[index];
-        final timeUntil = pass.start.difference(DateTime.now());
-        final isImminent = timeUntil.inMinutes < 30;
+      sliver: SliverList(
+        delegate: SliverChildBuilderDelegate(
+              (context, index) {
+            final pass = _filteredPasses[index];
+            final timeUntil = pass.start.difference(DateTime.now());
+            final isImminent = timeUntil.inMinutes < 30;
 
-        return GestureDetector(
-          onTap: () {
-            if (_currentPosition != null) {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => SatelliteDetailScreen(
-                    pass: pass,
-                    observerPosition: _currentPosition!,
+            return GestureDetector(
+              onTap: () {
+                if (_currentPosition != null) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => SatelliteDetailScreen(
+                        pass: pass,
+                        observerPosition: _currentPosition!,
+                      ),
+                    ),
+                  );
+                }
+              },
+              child: Card(
+                color: isImminent
+                    ? Colors.red.shade900.withOpacity(0.3)
+                    : Colors.white.withOpacity(0.1),
+                margin: const EdgeInsets.only(bottom: 12),
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: _getPowerColor(pass.power),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              pass.name,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          const Icon(Icons.chevron_right),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        pass.category,
+                        style: TextStyle(
+                          color: Colors.cyanAccent.shade400,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const Divider(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Max Elevation',
+                                style: TextStyle(
+                                    color: Colors.grey, fontSize: 11),
+                              ),
+                              Text(
+                                '${pass.maxElevation.toStringAsFixed(1)}°',
+                                style: const TextStyle(
+                                    fontSize: 14, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Start Time',
+                                style: TextStyle(
+                                    color: Colors.grey, fontSize: 11),
+                              ),
+                              Text(
+                                DateFormat('HH:mm').format(pass.start),
+                                style: const TextStyle(
+                                    fontSize: 14, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Duration',
+                                style: TextStyle(
+                                    color: Colors.grey, fontSize: 11),
+                              ),
+                              Text(
+                                '${pass.end.difference(pass.start).inMinutes}m',
+                                style: const TextStyle(
+                                    fontSize: 14, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-              );
-            }
-          },
-          child: Card(
-            color: isImminent
-                ? Colors.red.shade900.withOpacity(0.3)
-                : Colors.white.withOpacity(0.1),
-            margin: const EdgeInsets.only(bottom: 12),
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: _getPowerColor(pass.power),
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          pass.name,
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      const Icon(Icons.chevron_right),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    pass.category,
-                    style: TextStyle(
-                      color: Colors.cyanAccent.shade400,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const Divider(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            DateFormat('MMM dd, hh:mm a').format(pass.start),
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          Text(
-                            timeUntil.inMinutes < 60
-                                ? 'in ${timeUntil.inMinutes}m'
-                                : 'in ${timeUntil.inHours}h ${timeUntil.inMinutes % 60}m',
-                            style: TextStyle(
-                              color: isImminent
-                                  ? Colors.red.shade300
-                                  : Colors.grey.shade400,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            '${pass.maxElevation.toStringAsFixed(1)}°',
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Text(
-                            _getDirection(pass.azimuth),
-                            style: TextStyle(
-                              color: Colors.grey.shade400,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  LinearProgressIndicator(
-                    value: pass.power / 5.0,
-                    backgroundColor: Colors.grey.shade800,
-                    valueColor:
-                    AlwaysStoppedAnimation(_getPowerColor(pass.power)),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'EMF Power: ${pass.power.toStringAsFixed(1)}/5.0',
-                    style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
-                  ),
-                ],
               ),
-            ),
-          ),
-        );
-      },
+            );
+          },
+          childCount: _filteredPasses.length,
+        ),
+      ),
     );
   }
 }
