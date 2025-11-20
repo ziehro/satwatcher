@@ -18,6 +18,156 @@ class SatelliteService {
     'MUSSON': 3.5,
   };
 
+  static const Map<String, Map<String, dynamic>> satelliteEMFData = {
+    'RADAR': {
+      'type': 'Synthetic Aperture Radar (SAR)',
+      'frequency': 'X-Band (8-12 GHz)',
+      'peakPower': 3500.0, // Watts
+      'beamWidth': 1.2, // degrees
+      'swathWidth': 50.0, // km
+      'pulseWidth': 0.000030, // seconds (30 microseconds)
+      'prf': 3000.0, // Pulse Repetition Frequency (Hz)
+      'description': 'High-power imaging radar pulses',
+      'healthRisk': 'Moderate',
+    },
+    'GPS-OPS': {
+      'type': 'Navigation Signal',
+      'frequency': 'L-Band (1.2-1.5 GHz)',
+      'peakPower': 45.0,
+      'beamWidth': 28.0,
+      'swathWidth': 8000.0,
+      'pulseWidth': 1.0, // continuous
+      'prf': 0.0,
+      'description': 'Continuous low-power navigation signals',
+      'healthRisk': 'Low',
+    },
+    'GALILEO': {
+      'type': 'Navigation Signal',
+      'frequency': 'L-Band (1.2-1.5 GHz)',
+      'peakPower': 50.0,
+      'beamWidth': 26.0,
+      'swathWidth': 8000.0,
+      'pulseWidth': 1.0,
+      'prf': 0.0,
+      'description': 'European navigation signals',
+      'healthRisk': 'Low',
+    },
+    'BEIDOU': {
+      'type': 'Navigation Signal',
+      'frequency': 'L-Band (1.2-1.6 GHz)',
+      'peakPower': 55.0,
+      'beamWidth': 25.0,
+      'swathWidth': 8000.0,
+      'pulseWidth': 1.0,
+      'prf': 0.0,
+      'description': 'Chinese navigation signals',
+      'healthRisk': 'Low',
+    },
+    'GLONASS-OPS': {
+      'type': 'Navigation Signal',
+      'frequency': 'L-Band (1.2-1.6 GHz)',
+      'peakPower': 48.0,
+      'beamWidth': 27.0,
+      'swathWidth': 8000.0,
+      'pulseWidth': 1.0,
+      'prf': 0.0,
+      'description': 'Russian navigation signals',
+      'healthRisk': 'Low',
+    },
+    'TDRSS': {
+      'type': 'Communication Relay',
+      'frequency': 'S/Ka-Band (2-26 GHz)',
+      'peakPower': 2000.0,
+      'beamWidth': 2.5,
+      'swathWidth': 150.0,
+      'pulseWidth': 1.0,
+      'prf': 0.0,
+      'description': 'High-power satellite-to-satellite relay',
+      'healthRisk': 'Moderate',
+    },
+    'SARSAT': {
+      'type': 'Search & Rescue',
+      'frequency': 'L-Band (1.5 GHz)',
+      'peakPower': 120.0,
+      'beamWidth': 18.0,
+      'swathWidth': 4000.0,
+      'pulseWidth': 1.0,
+      'prf': 0.0,
+      'description': 'Emergency beacon receiver',
+      'healthRisk': 'Low',
+    },
+    'GOES': {
+      'type': 'Weather Imaging',
+      'frequency': 'L/S-Band (1-4 GHz)',
+      'peakPower': 800.0,
+      'beamWidth': 8.0,
+      'swathWidth': 3000.0,
+      'pulseWidth': 1.0,
+      'prf': 0.0,
+      'description': 'Weather data transmission',
+      'healthRisk': 'Low-Moderate',
+    },
+    'MUSSON': {
+      'type': 'Communication',
+      'frequency': 'C/Ku-Band (4-14 GHz)',
+      'peakPower': 600.0,
+      'beamWidth': 5.0,
+      'swathWidth': 500.0,
+      'pulseWidth': 1.0,
+      'prf': 0.0,
+      'description': 'Military communication satellite',
+      'healthRisk': 'Moderate',
+    },
+  };
+
+  static Map<String, dynamic> calculateEMFExposure(
+      String category,
+      double elevation,
+      double range, // km
+      ) {
+    final emfData = satelliteEMFData[category] ?? satelliteEMFData['GPS-OPS']!;
+    final peakPower = emfData['peakPower'] as double;
+    final beamWidth = emfData['beamWidth'] as double;
+
+    // Calculate power flux density at ground (W/m²)
+    // Using inverse square law with atmospheric attenuation
+    final distanceMeters = range * 1000.0;
+    final atmosphericLoss = 0.85; // 15% atmospheric absorption
+
+    // Beam area at ground level (m²)
+    final beamRadius = distanceMeters * tan(deg2rad(beamWidth / 2));
+    final beamArea = PI * beamRadius * beamRadius;
+
+    // Power density (W/m²)
+    final powerDensity = (peakPower * atmosphericLoss) / beamArea;
+
+    // Elevation factor - more direct = higher exposure
+    final elevationFactor = sin(deg2rad(elevation));
+
+    // Final exposure (µW/cm²)
+    final exposureMicrowatts = powerDensity * elevationFactor * 100; // Convert to µW/cm²
+
+    // Calculate percentage of safety limit
+    // ICNIRP guidelines: 10,000 µW/cm² for general public (averaged over 6 minutes)
+    final safetyLimit = 10000.0;
+    final percentOfLimit = (exposureMicrowatts / safetyLimit) * 100;
+
+    return {
+      'powerDensity': powerDensity,
+      'exposureMicrowatts': exposureMicrowatts,
+      'percentOfLimit': percentOfLimit,
+      'emfType': emfData['type'],
+      'frequency': emfData['frequency'],
+      'peakPower': peakPower,
+      'beamWidth': beamWidth,
+      'swathWidth': emfData['swathWidth'],
+      'description': emfData['description'],
+      'healthRisk': emfData['healthRisk'],
+      'pulseWidth': emfData['pulseWidth'],
+      'prf': emfData['prf'],
+    };
+  }
+
   static Future<List<SatelliteData>> fetchTLEs(String category) async {
     try {
       final response = await http.get(

@@ -31,6 +31,8 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
   Timer? _updateTimer;
   late AnimationController _radarController;
   late AnimationController _pulseController;
+  double _totalEMFExposure = 0.0;
+  int _activePassCount = 0;
 
   @override
   void initState() {
@@ -57,37 +59,119 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
 
   void _startUpdateTimer() {
     _updateTimer?.cancel();
-    _updateTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
+    _updateTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
       if (mounted) {
+        _calculateLiveEMF();
         setState(() {});
       }
+    });
+    // Calculate immediately
+    _calculateLiveEMF();
+  }
+
+  void _calculateLiveEMF() {
+    if (_currentPosition == null || _passes.isEmpty) {
+      _totalEMFExposure = 0.0;
+      _activePassCount = 0;
+      return;
+    }
+
+    double totalExposure = 0.0;
+    int activeCount = 0;
+    final now = DateTime.now();
+
+    for (var pass in _passes) {
+      // Check if satellite is currently overhead
+      if (now.isAfter(pass.start) && now.isBefore(pass.end)) {
+        try {
+          final pos = SatelliteService.getCurrentPosition(
+            pass.tle1,
+            pass.tle2,
+            pass.name,
+            _currentPosition!,
+          );
+
+          if (pos.isNotEmpty) {
+            final elevation = pos['elevation'] ?? 0.0;
+            final range = pos['range'] ?? 20000.0;
+
+            if (elevation > 0) {
+              final emf = SatelliteService.calculateEMFExposure(
+                pass.category,
+                elevation,
+                range,
+              );
+              totalExposure += emf['exposureMicrowatts'];
+              activeCount++;
+            }
+          }
+        } catch (e) {
+          // Skip this satellite
+        }
+      }
+    }
+
+    setState(() {
+      _totalEMFExposure = totalExposure;
+      _activePassCount = activeCount;
     });
   }
 
   Future<void> _loadPreferences() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _powerThreshold = prefs.getDouble('powerThreshold') ?? 1.0;
-      _zenithThreshold = prefs.getDouble('zenithThreshold') ?? 80.0;
-      _hoursAhead = prefs.getInt('hoursAhead') ?? 72;
-    });
+    try {
+      final prefs = await SharedPreferences.getInstance().timeout(
+        const Duration(seconds: 3),
+        onTimeout: () {
+          print('SharedPreferences load preferences timeout');
+          throw TimeoutException('Failed to load preferences');
+        },
+      );
+
+      setState(() {
+        _powerThreshold = prefs.getDouble('powerThreshold') ?? 1.0;
+        _zenithThreshold = prefs.getDouble('zenithThreshold') ?? 80.0;
+        _hoursAhead = prefs.getInt('hoursAhead') ?? 72;
+      });
+    } catch (e) {
+      print('Error loading preferences: $e');
+      // Use defaults if loading fails
+    }
   }
 
   Future<void> _savePreferences() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble('powerThreshold', _powerThreshold);
-    await prefs.setDouble('zenithThreshold', _zenithThreshold);
-    await prefs.setInt('hoursAhead', _hoursAhead);
+    try {
+      final prefs = await SharedPreferences.getInstance().timeout(
+        const Duration(seconds: 3),
+        onTimeout: () {
+          print('SharedPreferences save preferences timeout');
+          throw TimeoutException('Failed to save preferences');
+        },
+      );
+
+      await prefs.setDouble('powerThreshold', _powerThreshold);
+      await prefs.setDouble('zenithThreshold', _zenithThreshold);
+      await prefs.setInt('hoursAhead', _hoursAhead);
+    } catch (e) {
+      print('Error saving preferences: $e');
+      // Don't block the UI - just log the error
+    }
   }
 
   Future<void> _loadStoredPasses() async {
-    final prefs = await SharedPreferences.getInstance();
-    final passesJson = prefs.getString('satellite_passes');
-    final posLat = prefs.getDouble('position_lat');
-    final posLon = prefs.getDouble('position_lon');
+    try {
+      final prefs = await SharedPreferences.getInstance().timeout(
+        const Duration(seconds: 3),
+        onTimeout: () {
+          print('SharedPreferences timeout');
+          throw TimeoutException('Failed to load preferences');
+        },
+      );
 
-    if (passesJson != null && posLat != null && posLon != null) {
-      try {
+      final passesJson = prefs.getString('satellite_passes');
+      final posLat = prefs.getDouble('position_lat');
+      final posLon = prefs.getDouble('position_lon');
+
+      if (passesJson != null && posLat != null && posLon != null) {
         final List<dynamic> decoded = jsonDecode(passesJson);
         final passes = decoded.map((e) => SatellitePass.fromJson(e)).toList();
 
@@ -113,24 +197,37 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
             _statusMessage = 'Loaded ${validPasses.length} stored passes';
           });
 
-          // Reschedule notifications for loaded passes
+          // Reschedule notifications for loaded passes (don't await)
           _scheduleNotifications(validPasses);
           _startUpdateTimer();
         }
-      } catch (e) {
-        // Ignore errors loading stored data
       }
+    } catch (e) {
+      print('Error loading stored passes: $e');
+      // Don't block the UI - just log the error
     }
   }
 
   Future<void> _saveStoredPasses() async {
-    final prefs = await SharedPreferences.getInstance();
-    final passesJson = jsonEncode(_passes.map((e) => e.toJson()).toList());
-    await prefs.setString('satellite_passes', passesJson);
+    try {
+      final prefs = await SharedPreferences.getInstance().timeout(
+        const Duration(seconds: 3),
+        onTimeout: () {
+          print('SharedPreferences save timeout');
+          throw TimeoutException('Failed to save preferences');
+        },
+      );
 
-    if (_currentPosition != null) {
-      await prefs.setDouble('position_lat', _currentPosition!.latitude);
-      await prefs.setDouble('position_lon', _currentPosition!.longitude);
+      final passesJson = jsonEncode(_passes.map((e) => e.toJson()).toList());
+      await prefs.setString('satellite_passes', passesJson);
+
+      if (_currentPosition != null) {
+        await prefs.setDouble('position_lat', _currentPosition!.latitude);
+        await prefs.setDouble('position_lon', _currentPosition!.longitude);
+      }
+    } catch (e) {
+      print('Error saving stored passes: $e');
+      // Don't block the UI - just log the error
     }
   }
 
@@ -232,12 +329,20 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       if (_currentPosition == null) return;
     }
 
-    await NotificationService.requestPermissions();
-
     setState(() {
       _isLoading = true;
       _statusMessage = 'Loading satellites...';
     });
+
+    final permissionsGranted = await NotificationService.requestPermissions();
+    if (!permissionsGranted && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Notification permissions required for alerts'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
 
     try {
       final categories = [
@@ -283,20 +388,27 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
   }
 
   void _scheduleNotifications(List<SatellitePass> passes) {
-    for (var pass in passes.take(20)) {
-      final passDuration = pass.end.difference(pass.start);
-      final maxElevationTime = pass.start
-          .add(Duration(milliseconds: passDuration.inMilliseconds ~/ 2));
+    // Schedule in background - don't block UI
+    Future.microtask(() async {
+      try {
+        for (var pass in passes.take(20)) {
+          final passDuration = pass.end.difference(pass.start);
+          final maxElevationTime = pass.start
+              .add(Duration(milliseconds: passDuration.inMilliseconds ~/ 2));
 
-      final notifTime = maxElevationTime.subtract(const Duration(minutes: 5));
-      if (notifTime.isAfter(DateTime.now())) {
-        NotificationService.scheduleNotification(
-          pass.name,
-          'High-power satellite at max elevation in 5 minutes!\nPower: ${pass.power.toStringAsFixed(1)}/5.0 | Elevation: ${pass.maxElevation.toStringAsFixed(1)}°',
-          notifTime,
-        );
+          final notifTime = maxElevationTime.subtract(const Duration(minutes: 5));
+          if (notifTime.isAfter(DateTime.now())) {
+            await NotificationService.scheduleNotification(
+              pass.name,
+              'High-power satellite at max elevation in 5 minutes!\nPower: ${pass.power.toStringAsFixed(1)}/5.0 | Elevation: ${pass.maxElevation.toStringAsFixed(1)}°',
+              notifTime,
+            );
+          }
+        }
+      } catch (e) {
+        print('Error scheduling notifications: $e');
       }
-    }
+    });
   }
 
 
@@ -342,6 +454,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
             children: [
               _buildHeader(),
               _buildRadarAnimation(),
+              _buildLiveEMFDisplay(),
               _buildFilters(),
               Expanded(child: _buildPassList()),
             ],
@@ -375,12 +488,168 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
                 'EMF Satellite Tracker',
                 style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
               ),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.notifications),
+                onPressed: _checkNotifications,
+                tooltip: 'Check notifications',
+              ),
             ],
           ),
           const SizedBox(height: 8),
           Text(
             _statusMessage,
             style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _checkNotifications() async {
+    final pending = await NotificationService.getPendingNotifications();
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text('Scheduled Notifications'),
+            Text(
+              '${pending.length}',
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.cyanAccent.shade400,
+              ),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: pending.isEmpty
+              ? const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Text(
+              'No notifications scheduled.\n\nNotifications will be created automatically when you track satellites.',
+              textAlign: TextAlign.center,
+            ),
+          )
+              : ListView.builder(
+            shrinkWrap: true,
+            itemCount: pending.length,
+            itemBuilder: (context, index) {
+              final notification = pending[index];
+              // Convert notification ID back to timestamp
+              final scheduledTime = DateTime.fromMillisecondsSinceEpoch(
+                notification.id * 1000,
+              );
+              final timeUntil = scheduledTime.difference(DateTime.now());
+
+              return Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ListTile(
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 4,
+                  ),
+                  title: Text(
+                    notification.title ?? 'Unknown',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 4),
+                      Text(
+                        DateFormat('MMM dd, hh:mm a').format(scheduledTime),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.cyanAccent.shade400,
+                        ),
+                      ),
+                      Text(
+                        timeUntil.isNegative
+                            ? 'Past due'
+                            : timeUntil.inMinutes < 60
+                            ? 'in ${timeUntil.inMinutes}m'
+                            : 'in ${timeUntil.inHours}h ${timeUntil.inMinutes % 60}m',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: timeUntil.isNegative
+                              ? Colors.red.shade300
+                              : Colors.grey.shade400,
+                        ),
+                      ),
+                    ],
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete, size: 20),
+                    color: Colors.red.shade400,
+                    onPressed: () async {
+                      await NotificationService.cancelNotification(
+                        notification.id,
+                      );
+                      Navigator.pop(context);
+                      _checkNotifications(); // Refresh the dialog
+                    },
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          if (pending.isNotEmpty)
+            TextButton.icon(
+              onPressed: () async {
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Delete All Notifications?'),
+                    content: Text(
+                      'This will cancel all ${pending.length} scheduled notifications.',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.red,
+                        ),
+                        child: const Text('Delete All'),
+                      ),
+                    ],
+                  ),
+                );
+
+                if (confirm == true && mounted) {
+                  await NotificationService.cancelAllNotifications();
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('All notifications cancelled'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                }
+              },
+              icon: const Icon(Icons.delete_sweep),
+              label: const Text('Delete All'),
+              style: TextButton.styleFrom(foregroundColor: Colors.red),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
           ),
         ],
       ),
@@ -402,6 +671,126 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
             size: const Size(double.infinity, 150),
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildLiveEMFDisplay() {
+    if (_passes.isEmpty) return const SizedBox.shrink();
+
+    final percentOfLimit = (_totalEMFExposure / 10000.0) * 100;
+    final exposureColor = percentOfLimit >= 50
+        ? Colors.red
+        : percentOfLimit >= 25
+        ? Colors.orange
+        : percentOfLimit >= 10
+        ? Colors.yellow
+        : Colors.green;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Card(
+        color: _activePassCount > 0
+            ? exposureColor.withOpacity(0.2)
+            : Colors.white.withOpacity(0.05),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.sensors,
+                    color: _activePassCount > 0 ? exposureColor : Colors.grey.shade600,
+                    size: 28,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'LIVE EMF EXPOSURE',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.2,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _activePassCount == 0
+                              ? 'No satellites overhead'
+                              : '$_activePassCount satellite${_activePassCount > 1 ? 's' : ''} overhead',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey.shade400,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _activePassCount > 0 ? exposureColor : Colors.grey.shade700,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      children: [
+                        Text(
+                          _totalEMFExposure.toStringAsFixed(3),
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black,
+                          ),
+                        ),
+                        const Text(
+                          'µW/cm²',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.black,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              LinearProgressIndicator(
+                value: _activePassCount > 0 ? (percentOfLimit / 100).clamp(0.0, 1.0) : 0.0,
+                backgroundColor: Colors.grey.shade800,
+                valueColor: AlwaysStoppedAnimation(
+                    _activePassCount > 0 ? exposureColor : Colors.grey.shade600
+                ),
+                minHeight: 8,
+              ),
+              const SizedBox(height: 6),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    '${percentOfLimit.toStringAsFixed(4)}% of safety limit',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey.shade400,
+                    ),
+                  ),
+                  Text(
+                    'Limit: 10,000 µW/cm²',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey.shade500,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

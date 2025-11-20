@@ -22,6 +22,7 @@ class SatelliteDetailScreen extends StatefulWidget {
 
 class _SatelliteDetailScreenState extends State<SatelliteDetailScreen> {
   Map<String, dynamic>? _currentPosition;
+  Map<String, dynamic>? _emfExposure;
   Timer? _updateTimer;
 
   @override
@@ -48,9 +49,19 @@ class _SatelliteDetailScreenState extends State<SatelliteDetailScreen> {
       widget.pass.name,
       widget.observerPosition,
     );
-    if (mounted) {
+    if (mounted && pos.isNotEmpty) {
+      final elevation = pos['elevation'] ?? 0.0;
+      final range = pos['range'] ?? 20000.0;
+
+      final emf = SatelliteService.calculateEMFExposure(
+        widget.pass.category,
+        elevation,
+        range,
+      );
+
       setState(() {
         _currentPosition = pos;
+        _emfExposure = emf;
       });
     }
   }
@@ -59,6 +70,13 @@ class _SatelliteDetailScreenState extends State<SatelliteDetailScreen> {
     if (power >= 4.5) return Colors.red;
     if (power >= 3.5) return Colors.orange;
     if (power >= 2.5) return Colors.yellow;
+    return Colors.green;
+  }
+
+  Color _getExposureColor(double percentOfLimit) {
+    if (percentOfLimit >= 50) return Colors.red;
+    if (percentOfLimit >= 25) return Colors.orange;
+    if (percentOfLimit >= 10) return Colors.yellow;
     return Colors.green;
   }
 
@@ -119,6 +137,133 @@ class _SatelliteDetailScreenState extends State<SatelliteDetailScreen> {
                   ),
                 ),
               if (isActive) const SizedBox(height: 16),
+
+              // EMF Exposure Card
+              if (_emfExposure != null) ...[
+                Card(
+                  color: Colors.red.shade900.withOpacity(0.2),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.warning_amber, color: _getExposureColor(_emfExposure!['percentOfLimit'])),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Current EMF Exposure',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: _getExposureColor(_emfExposure!['percentOfLimit']).withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: _getExposureColor(_emfExposure!['percentOfLimit']),
+                              width: 2,
+                            ),
+                          ),
+                          child: Column(
+                            children: [
+                              Text(
+                                '${_emfExposure!['exposureMicrowatts'].toStringAsFixed(3)} µW/cm²',
+                                style: const TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '${_emfExposure!['percentOfLimit'].toStringAsFixed(4)}% of safety limit',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade400,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'Safety Limit: 10,000 µW/cm² (ICNIRP)',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey.shade500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // EMF Characteristics
+                Card(
+                  color: Colors.white.withOpacity(0.1),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'EMF Characteristics',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        _buildInfoRow('Type', _emfExposure!['emfType']),
+                        _buildInfoRow('Frequency', _emfExposure!['frequency']),
+                        _buildInfoRow('Peak Power', '${_emfExposure!['peakPower'].toStringAsFixed(0)} W'),
+                        _buildInfoRow('Beam Width', '${_emfExposure!['beamWidth'].toStringAsFixed(1)}°'),
+                        _buildInfoRow('Swath Width', '${_emfExposure!['swathWidth'].toStringAsFixed(0)} km'),
+                        if (_emfExposure!['prf'] > 0)
+                          _buildInfoRow('Pulse Rate', '${_emfExposure!['prf'].toStringAsFixed(0)} Hz'),
+                        const Divider(height: 24),
+                        Row(
+                          children: [
+                            const Text('Health Risk: ', style: TextStyle(fontWeight: FontWeight.bold)),
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: _getExposureColor(_emfExposure!['percentOfLimit']),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                _emfExposure!['healthRisk'],
+                                style: const TextStyle(
+                                  color: Colors.black,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _emfExposure!['description'],
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade400,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
 
               // Sky View
               Card(

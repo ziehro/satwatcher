@@ -5,8 +5,22 @@ import 'services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  tz.initializeTimeZones();
-  await NotificationService.init();
+
+  try {
+    tz.initializeTimeZones();
+
+    // Add timeout to prevent hanging
+    await NotificationService.init().timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {
+        print('Notification service init timed out');
+      },
+    );
+  } catch (e) {
+    print('Error during initialization: $e');
+    // Continue anyway - don't block app startup
+  }
+
   runApp(const EMFSatTrackerApp());
 }
 
