@@ -158,6 +158,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       });
     } catch (e) {
       print('Error loading preferences: $e');
+      // Use defaults if loading fails
     }
   }
 
@@ -176,6 +177,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       await prefs.setInt('hoursAhead', _hoursAhead);
     } catch (e) {
       print('Error saving preferences: $e');
+      // Don't block the UI - just log the error
     }
   }
 
@@ -219,12 +221,14 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
             _statusMessage = 'Loaded ${validPasses.length} stored passes';
           });
 
+          // Reschedule notifications for loaded passes (don't await)
           _scheduleNotifications(validPasses);
           _startUpdateTimer();
         }
       }
     } catch (e) {
       print('Error loading stored passes: $e');
+      // Don't block the UI - just log the error
     }
   }
 
@@ -247,6 +251,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       }
     } catch (e) {
       print('Error saving stored passes: $e');
+      // Don't block the UI - just log the error
     }
   }
 
@@ -407,6 +412,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
   }
 
   void _scheduleNotifications(List<SatellitePass> passes) {
+    // Schedule in background - don't block UI
     Future.microtask(() async {
       try {
         for (var pass in passes.take(20)) {
@@ -439,6 +445,12 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     }).take(10).toList();
   }
 
+  String _getDirection(double azimuth) {
+    const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+    final index = ((azimuth + 22.5) / 45).floor() % 8;
+    return '${directions[index]} (${azimuth.toStringAsFixed(0)}°)';
+  }
+
   Color _getPowerColor(double power) {
     if (power >= 4.5) return Colors.red;
     if (power >= 3.5) return Colors.orange;
@@ -462,34 +474,165 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
           ),
         ),
         child: SafeArea(
-          // CHANGED: Switched to CustomScrollView to prevent overflow
-          child: CustomScrollView(
-            slivers: [
-              SliverToBoxAdapter(
-                child: Column(
-                  children: [
-                    _buildHeader(),
-                    _buildRadarAnimation(),
-                    _buildLiveEMFDisplay(),
-                    _buildFilters(),
-                  ],
-                ),
-              ),
-              _buildPassListSliver(),
+          child: Column(
+            children: [
+              _buildHeader(),
+              _buildRadarAnimation(),
+              _buildLiveEMFDisplay(),
+              _buildFilters(),
+              Expanded(child: _buildPassList()),
             ],
           ),
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _isLoading ? null : _showTrackingOptions,
-        icon: _isLoading
-            ? const SizedBox(
-          width: 20,
-          height: 20,
-          child: CircularProgressIndicator(strokeWidth: 2),
-        )
-            : const Icon(Icons.satellite_alt),
-        label: Text(_isLoading ? 'Loading...' : 'Track Satellites'),
+      floatingActionButton: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          // TEST IMMEDIATE NOTIFICATION (Red)
+          FloatingActionButton(
+            heroTag: 'test_immediate',
+            backgroundColor: Colors.red,
+            tooltip: 'Test NOW',
+            onPressed: () async {
+              try {
+                print('🔔 Testing IMMEDIATE notification...');
+
+                final granted = await NotificationService.requestPermissions();
+                print('📱 Permissions granted: $granted');
+
+                if (!granted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        '❌ PERMISSION DENIED!\n\n'
+                            'Go to: Settings → Apps → EMF Sat Tracker\n'
+                            '→ Notifications → Turn ON\n'
+                            '→ Alarms & reminders → Turn ON',
+                      ),
+                      duration: Duration(seconds: 8),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                  return;
+                }
+
+                // Show IMMEDIATE notification (no delay)
+                print('⚡ Showing IMMEDIATE notification...');
+                await NotificationService.showImmediateNotification(
+                  '⚡ IMMEDIATE TEST',
+                  'This notification appears NOW! If you see it, notifications work! ✅',
+                );
+
+                print('✅ Immediate notification shown!');
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      '⚡ IMMEDIATE NOTIFICATION SENT!\n\n'
+                          'Check notification bar NOW!',
+                    ),
+                    duration: Duration(seconds: 3),
+                    backgroundColor: Colors.orange,
+                  ),
+                );
+              } catch (e) {
+                print('❌ Error: $e');
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('❌ ERROR: $e'),
+                    duration: const Duration(seconds: 5),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+            },
+            child: const Icon(Icons.flash_on, size: 32),
+          ),
+          const SizedBox(height: 10),
+
+          // TEST SCHEDULED NOTIFICATION (Orange)
+          FloatingActionButton(
+            heroTag: 'test_scheduled',
+            backgroundColor: Colors.orange,
+            tooltip: 'Test 5 sec delay',
+            onPressed: () async {
+              try {
+                print('🔔 Testing SCHEDULED notification...');
+
+                final granted = await NotificationService.requestPermissions();
+                print('📱 Permissions granted: $granted');
+
+                if (!granted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        '❌ PERMISSION DENIED!\n\n'
+                            'Go to: Settings → Apps → EMF Sat Tracker\n'
+                            '→ Notifications → Turn ON\n'
+                            '→ Alarms & reminders → Turn ON',
+                      ),
+                      duration: Duration(seconds: 8),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                  return;
+                }
+
+                final testTime = DateTime.now().add(const Duration(seconds: 5));
+                print('⏰ Scheduling for: $testTime');
+
+                await NotificationService.scheduleNotification(
+                  '🧪 SCHEDULED TEST',
+                  'SUCCESS! Scheduled notifications work! ✅\n'
+                      'Time: ${DateTime.now().toString().substring(11, 19)}',
+                  testTime,
+                );
+
+                print('✅ Notification scheduled successfully!');
+
+                final pending = await NotificationService.getPendingNotifications();
+                print('📋 Pending notifications: ${pending.length}');
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      '⏰ SCHEDULED TEST\n\n'
+                          'Notification in 5 seconds...\n'
+                          'Pending: ${pending.length}',
+                    ),
+                    duration: const Duration(seconds: 4),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              } catch (e) {
+                print('❌ Error: $e');
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('❌ ERROR: $e'),
+                    duration: const Duration(seconds: 5),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+            },
+            child: const Icon(Icons.notifications_active, size: 28),
+          ),
+          const SizedBox(height: 16),
+
+          // TRACK SATELLITES BUTTON
+          FloatingActionButton.extended(
+            heroTag: 'track',
+            onPressed: _isLoading ? null : _showTrackingOptions,
+            icon: _isLoading
+                ? const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+                : const Icon(Icons.satellite_alt),
+            label: Text(_isLoading ? 'Loading...' : 'Track Satellites'),
+          ),
+        ],
       ),
     );
   }
@@ -508,10 +651,23 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
                 style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
               ),
               const Spacer(),
+              // Check notifications button
               IconButton(
                 icon: const Icon(Icons.notifications),
                 onPressed: _checkNotifications,
                 tooltip: 'Check notifications',
+              ),
+              // TEST: Notification test button
+              IconButton(
+                icon: const Icon(Icons.notifications_active, color: Colors.yellow),
+                onPressed: _testNotification,
+                tooltip: 'Test notification (5 sec)',
+              ),
+              // TEST: Widget test button
+              IconButton(
+                icon: const Icon(Icons.widgets, color: Colors.cyan),
+                onPressed: _testWidget,
+                tooltip: 'Test widget',
               ),
             ],
           ),
@@ -523,6 +679,80 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
         ],
       ),
     );
+  }
+
+  Future<void> _testNotification() async {
+    try {
+      final granted = await NotificationService.requestPermissions();
+
+      if (!granted && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('❌ Notification permissions denied!\n\nGo to: Settings → Apps → EMF Sat Tracker → Notifications → Turn ON'),
+            duration: Duration(seconds: 5),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      await NotificationService.scheduleNotification(
+        '🧪 TEST NOTIFICATION',
+        'If you see this in 5 seconds, notifications work! ✅',
+        DateTime.now().add(const Duration(seconds: 5)),
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Test notification scheduled for 5 seconds from now...'),
+            duration: Duration(seconds: 3),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error: $e'),
+            duration: const Duration(seconds: 5),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _testWidget() async {
+    try {
+      await WidgetService.updateWidget(
+        emfValue: 1.234,
+        satCount: 3,
+        percentLimit: 0.0123,
+        nextPass: 'TEST SAT in 15m',
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Widget updated with test data!\n\nCheck home screen widget now.'),
+            duration: Duration(seconds: 3),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Widget error: $e\n\nMake sure:\n1. Widget added to home screen\n2. App rebuilt after adding widget files'),
+            duration: const Duration(seconds: 5),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _checkNotifications() async {
@@ -560,6 +790,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
             itemCount: pending.length,
             itemBuilder: (context, index) {
               final notification = pending[index];
+              // Convert notification ID back to timestamp
               final scheduledTime = DateTime.fromMillisecondsSinceEpoch(
                 notification.id * 1000,
               );
@@ -615,7 +846,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
                         notification.id,
                       );
                       Navigator.pop(context);
-                      _checkNotifications();
+                      _checkNotifications(); // Refresh the dialog
                     },
                   ),
                 ),
@@ -627,14 +858,39 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
           if (pending.isNotEmpty)
             TextButton.icon(
               onPressed: () async {
-                await NotificationService.cancelAllNotifications();
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('All notifications cancelled'),
-                    duration: Duration(seconds: 2),
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Delete All Notifications?'),
+                    content: Text(
+                      'This will cancel all ${pending.length} scheduled notifications.',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.red,
+                        ),
+                        child: const Text('Delete All'),
+                      ),
+                    ],
                   ),
                 );
+
+                if (confirm == true && mounted) {
+                  await NotificationService.cancelAllNotifications();
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('All notifications cancelled'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                }
               },
               icon: const Icon(Icons.delete_sweep),
               label: const Text('Delete All'),
@@ -872,153 +1128,151 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     );
   }
 
-  // CHANGED: Refactored to work with CustomScrollView (SliverList)
-  Widget _buildPassListSliver() {
+  Widget _buildPassList() {
     if (_filteredPasses.isEmpty) {
-      return SliverFillRemaining(
-        hasScrollBody: false,
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.satellite_alt, size: 64, color: Colors.grey.shade700),
-              const SizedBox(height: 16),
-              Text(
-                _passes.isEmpty
-                    ? 'No passes calculated yet'
-                    : 'No passes match your filters',
-                style: TextStyle(color: Colors.grey.shade400),
-              ),
-            ],
-          ),
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.satellite_alt, size: 64, color: Colors.grey.shade700),
+            const SizedBox(height: 16),
+            Text(
+              _passes.isEmpty
+                  ? 'No passes calculated yet'
+                  : 'No passes match your filters',
+              style: TextStyle(color: Colors.grey.shade400),
+            ),
+          ],
         ),
       );
     }
 
-    return SliverPadding(
+    return ListView.builder(
       padding: const EdgeInsets.all(16),
-      sliver: SliverList(
-        delegate: SliverChildBuilderDelegate(
-              (context, index) {
-            final pass = _filteredPasses[index];
-            final timeUntil = pass.start.difference(DateTime.now());
-            final isImminent = timeUntil.inMinutes < 30;
+      itemCount: _filteredPasses.length,
+      itemBuilder: (context, index) {
+        final pass = _filteredPasses[index];
+        final timeUntil = pass.start.difference(DateTime.now());
+        final isImminent = timeUntil.inMinutes < 30;
 
-            return GestureDetector(
-              onTap: () {
-                if (_currentPosition != null) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => SatelliteDetailScreen(
-                        pass: pass,
-                        observerPosition: _currentPosition!,
-                      ),
-                    ),
-                  );
-                }
-              },
-              child: Card(
-                color: isImminent
-                    ? Colors.red.shade900.withOpacity(0.3)
-                    : Colors.white.withOpacity(0.1),
-                margin: const EdgeInsets.only(bottom: 12),
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+        return GestureDetector(
+          onTap: () {
+            if (_currentPosition != null) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => SatelliteDetailScreen(
+                    pass: pass,
+                    observerPosition: _currentPosition!,
+                  ),
+                ),
+              );
+            }
+          },
+          child: Card(
+            color: isImminent
+                ? Colors.red.shade900.withOpacity(0.3)
+                : Colors.white.withOpacity(0.1),
+            margin: const EdgeInsets.only(bottom: 12),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
-                      Row(
-                        children: [
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: BoxDecoration(
-                              color: _getPowerColor(pass.power),
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              pass.name,
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          const Icon(Icons.chevron_right),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        pass.category,
-                        style: TextStyle(
-                          color: Colors.cyanAccent.shade400,
-                          fontSize: 12,
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: _getPowerColor(pass.power),
+                          shape: BoxShape.circle,
                         ),
                       ),
-                      const Divider(height: 16),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          pass.name,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      const Icon(Icons.chevron_right),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    pass.category,
+                    style: TextStyle(
+                      color: Colors.cyanAccent.shade400,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const Divider(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Max Elevation',
-                                style: TextStyle(
-                                    color: Colors.grey, fontSize: 11),
-                              ),
-                              Text(
-                                '${pass.maxElevation.toStringAsFixed(1)}°',
-                                style: const TextStyle(
-                                    fontSize: 14, fontWeight: FontWeight.bold),
-                              ),
-                            ],
+                          Text(
+                            DateFormat('MMM dd, hh:mm a').format(pass.start),
+                            style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Start Time',
-                                style: TextStyle(
-                                    color: Colors.grey, fontSize: 11),
-                              ),
-                              Text(
-                                DateFormat('HH:mm').format(pass.start),
-                                style: const TextStyle(
-                                    fontSize: 14, fontWeight: FontWeight.bold),
-                              ),
-                            ],
+                          Text(
+                            timeUntil.inMinutes < 60
+                                ? 'in ${timeUntil.inMinutes}m'
+                                : 'in ${timeUntil.inHours}h ${timeUntil.inMinutes % 60}m',
+                            style: TextStyle(
+                              color: isImminent
+                                  ? Colors.red.shade300
+                                  : Colors.grey.shade400,
+                              fontSize: 12,
+                            ),
                           ),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Duration',
-                                style: TextStyle(
-                                    color: Colors.grey, fontSize: 11),
-                              ),
-                              Text(
-                                '${pass.end.difference(pass.start).inMinutes}m',
-                                style: const TextStyle(
-                                    fontSize: 14, fontWeight: FontWeight.bold),
-                              ),
-                            ],
+                        ],
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            '${pass.maxElevation.toStringAsFixed(1)}°',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            _getDirection(pass.azimuth),
+                            style: TextStyle(
+                              color: Colors.grey.shade400,
+                              fontSize: 12,
+                            ),
                           ),
                         ],
                       ),
                     ],
                   ),
-                ),
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(
+                    value: pass.power / 5.0,
+                    backgroundColor: Colors.grey.shade800,
+                    valueColor:
+                    AlwaysStoppedAnimation(_getPowerColor(pass.power)),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'EMF Power: ${pass.power.toStringAsFixed(1)}/5.0',
+                    style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                  ),
+                ],
               ),
-            );
-          },
-          childCount: _filteredPasses.length,
-        ),
-      ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

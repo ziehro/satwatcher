@@ -21,14 +21,16 @@ class NotificationService {
 
     await _notifications.initialize(settings);
 
-    // Create notification channel for Android
+    // Create notification channel with MAX importance
     const androidChannel = AndroidNotificationChannel(
       'satellite_passes',
       'Satellite Passes',
       description: 'Notifications for upcoming satellite passes',
-      importance: Importance.high,
+      importance: Importance.max,
       playSound: true,
       enableVibration: true,
+      enableLights: true,
+      showBadge: true,
     );
 
     await _notifications
@@ -62,15 +64,25 @@ class NotificationService {
       DateTime scheduledTime,
       ) async {
     try {
-      const androidDetails = AndroidNotificationDetails(
+      // NOTE: Cannot use const because title and scheduledTime are runtime values
+      final androidDetails = AndroidNotificationDetails(
         'satellite_passes',
         'Satellite Passes',
         channelDescription: 'Notifications for upcoming satellite passes',
-        importance: Importance.high,
-        priority: Priority.high,
+        importance: Importance.max,
+        priority: Priority.max,
         playSound: true,
         enableVibration: true,
+        enableLights: true,
         icon: '@mipmap/ic_launcher',
+        showWhen: true,
+        when: scheduledTime.millisecondsSinceEpoch,
+        usesChronometer: false,
+        channelShowBadge: true,
+        autoCancel: true,
+        ongoing: false,
+        visibility: NotificationVisibility.public,
+        ticker: title,
       );
 
       const iosDetails = DarwinNotificationDetails(
@@ -79,7 +91,7 @@ class NotificationService {
         presentSound: true,
       );
 
-      const details = NotificationDetails(
+      final details = NotificationDetails(
         android: androidDetails,
         iOS: iosDetails,
       );
@@ -101,6 +113,42 @@ class NotificationService {
     } catch (e) {
       print('Error scheduling notification: $e');
     }
+  }
+
+  static Future<void> showImmediateNotification(String title, String body) async {
+    // Show notification immediately (for testing)
+    // NOTE: Cannot use const because title is a runtime value
+    final androidDetails = AndroidNotificationDetails(
+      'satellite_passes',
+      'Satellite Passes',
+      channelDescription: 'Notifications for upcoming satellite passes',
+      importance: Importance.max,
+      priority: Priority.max,
+      playSound: true,
+      enableVibration: true,
+      enableLights: true,
+      icon: '@mipmap/ic_launcher',
+      visibility: NotificationVisibility.public,
+      ticker: title,
+    );
+
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+
+    final details = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
+
+    await _notifications.show(
+      DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title,
+      body,
+      details,
+    );
   }
 
   static Future<void> cancelAllNotifications() async {
