@@ -40,7 +40,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     super.initState();
     _radarController = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 3),
+      duration: const Duration(seconds: 10),
     )..repeat();
     _pulseController = AnimationController(
       vsync: this,
@@ -144,7 +144,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
   Future<void> _loadPreferences() async {
     try {
       final prefs = await SharedPreferences.getInstance().timeout(
-        const Duration(seconds: 3),
+        const Duration(seconds: 10),
         onTimeout: () {
           print('SharedPreferences load preferences timeout');
           throw TimeoutException('Failed to load preferences');
@@ -165,7 +165,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
   Future<void> _savePreferences() async {
     try {
       final prefs = await SharedPreferences.getInstance().timeout(
-        const Duration(seconds: 3),
+        const Duration(seconds: 10),
         onTimeout: () {
           print('SharedPreferences save preferences timeout');
           throw TimeoutException('Failed to save preferences');
@@ -184,7 +184,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
   Future<void> _loadStoredPasses() async {
     try {
       final prefs = await SharedPreferences.getInstance().timeout(
-        const Duration(seconds: 3),
+        const Duration(seconds: 10),
         onTimeout: () {
           print('SharedPreferences timeout');
           throw TimeoutException('Failed to load preferences');
@@ -235,7 +235,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
   Future<void> _saveStoredPasses() async {
     try {
       final prefs = await SharedPreferences.getInstance().timeout(
-        const Duration(seconds: 3),
+        const Duration(seconds: 10),
         onTimeout: () {
           print('SharedPreferences save timeout');
           throw TimeoutException('Failed to save preferences');
@@ -363,7 +363,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Notification permissions required for alerts'),
-          duration: Duration(seconds: 3),
+          duration: Duration(seconds: 10),
         ),
       );
     }
@@ -485,154 +485,16 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
           ),
         ),
       ),
-      floatingActionButton: Column(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          // TEST IMMEDIATE NOTIFICATION (Red)
-          FloatingActionButton(
-            heroTag: 'test_immediate',
-            backgroundColor: Colors.red,
-            tooltip: 'Test NOW',
-            onPressed: () async {
-              try {
-                print('🔔 Testing IMMEDIATE notification...');
-
-                final granted = await NotificationService.requestPermissions();
-                print('📱 Permissions granted: $granted');
-
-                if (!granted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        '❌ PERMISSION DENIED!\n\n'
-                            'Go to: Settings → Apps → EMF Sat Tracker\n'
-                            '→ Notifications → Turn ON\n'
-                            '→ Alarms & reminders → Turn ON',
-                      ),
-                      duration: Duration(seconds: 8),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                  return;
-                }
-
-                // Show IMMEDIATE notification (no delay)
-                print('⚡ Showing IMMEDIATE notification...');
-                await NotificationService.showImmediateNotification(
-                  '⚡ IMMEDIATE TEST',
-                  'This notification appears NOW! If you see it, notifications work! ✅',
-                );
-
-                print('✅ Immediate notification shown!');
-
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      '⚡ IMMEDIATE NOTIFICATION SENT!\n\n'
-                          'Check notification bar NOW!',
-                    ),
-                    duration: Duration(seconds: 3),
-                    backgroundColor: Colors.orange,
-                  ),
-                );
-              } catch (e) {
-                print('❌ Error: $e');
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('❌ ERROR: $e'),
-                    duration: const Duration(seconds: 5),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              }
-            },
-            child: const Icon(Icons.flash_on, size: 32),
-          ),
-          const SizedBox(height: 10),
-
-          // TEST SCHEDULED NOTIFICATION (Orange)
-          FloatingActionButton(
-            heroTag: 'test_scheduled',
-            backgroundColor: Colors.orange,
-            tooltip: 'Test 5 sec delay',
-            onPressed: () async {
-              try {
-                print('🔔 Testing SCHEDULED notification...');
-
-                final granted = await NotificationService.requestPermissions();
-                print('📱 Permissions granted: $granted');
-
-                if (!granted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        '❌ PERMISSION DENIED!\n\n'
-                            'Go to: Settings → Apps → EMF Sat Tracker\n'
-                            '→ Notifications → Turn ON\n'
-                            '→ Alarms & reminders → Turn ON',
-                      ),
-                      duration: Duration(seconds: 8),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                  return;
-                }
-
-                final testTime = DateTime.now().add(const Duration(seconds: 5));
-                print('⏰ Scheduling for: $testTime');
-
-                await NotificationService.scheduleNotification(
-                  '🧪 SCHEDULED TEST',
-                  'SUCCESS! Scheduled notifications work! ✅\n'
-                      'Time: ${DateTime.now().toString().substring(11, 19)}',
-                  testTime,
-                );
-
-                print('✅ Notification scheduled successfully!');
-
-                final pending = await NotificationService.getPendingNotifications();
-                print('📋 Pending notifications: ${pending.length}');
-
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      '⏰ SCHEDULED TEST\n\n'
-                          'Notification in 5 seconds...\n'
-                          'Pending: ${pending.length}',
-                    ),
-                    duration: const Duration(seconds: 4),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-              } catch (e) {
-                print('❌ Error: $e');
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('❌ ERROR: $e'),
-                    duration: const Duration(seconds: 5),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              }
-            },
-            child: const Icon(Icons.notifications_active, size: 28),
-          ),
-          const SizedBox(height: 16),
-
-          // TRACK SATELLITES BUTTON
-          FloatingActionButton.extended(
-            heroTag: 'track',
-            onPressed: _isLoading ? null : _showTrackingOptions,
-            icon: _isLoading
-                ? const SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-                : const Icon(Icons.satellite_alt),
-            label: Text(_isLoading ? 'Loading...' : 'Track Satellites'),
-          ),
-        ],
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _isLoading ? null : _showTrackingOptions,
+        icon: _isLoading
+            ? const SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        )
+            : const Icon(Icons.satellite_alt),
+        label: Text(_isLoading ? 'Loading...' : 'Track Satellites'),
       ),
     );
   }
@@ -644,30 +506,19 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
         children: [
           Row(
             children: [
-              const Icon(Icons.radar, size: 32, color: Colors.cyanAccent),
-              const SizedBox(width: 12),
-              const Text(
-                'EMF Satellite Tracker',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              const Icon(Icons.radar, size: 28, color: Colors.cyanAccent),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'EMF Sat Tracker',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-              const Spacer(),
-              // Check notifications button
               IconButton(
                 icon: const Icon(Icons.notifications),
                 onPressed: _checkNotifications,
                 tooltip: 'Check notifications',
-              ),
-              // TEST: Notification test button
-              IconButton(
-                icon: const Icon(Icons.notifications_active, color: Colors.yellow),
-                onPressed: _testNotification,
-                tooltip: 'Test notification (5 sec)',
-              ),
-              // TEST: Widget test button
-              IconButton(
-                icon: const Icon(Icons.widgets, color: Colors.cyan),
-                onPressed: _testWidget,
-                tooltip: 'Test widget',
               ),
             ],
           ),
@@ -681,82 +532,9 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     );
   }
 
-  Future<void> _testNotification() async {
-    try {
-      final granted = await NotificationService.requestPermissions();
-
-      if (!granted && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('❌ Notification permissions denied!\n\nGo to: Settings → Apps → EMF Sat Tracker → Notifications → Turn ON'),
-            duration: Duration(seconds: 5),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-
-      await NotificationService.scheduleNotification(
-        '🧪 TEST NOTIFICATION',
-        'If you see this in 5 seconds, notifications work! ✅',
-        DateTime.now().add(const Duration(seconds: 5)),
-      );
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('✅ Test notification scheduled for 5 seconds from now...'),
-            duration: Duration(seconds: 3),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ Error: $e'),
-            duration: const Duration(seconds: 5),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _testWidget() async {
-    try {
-      await WidgetService.updateWidget(
-        emfValue: 1.234,
-        satCount: 3,
-        percentLimit: 0.0123,
-        nextPass: 'TEST SAT in 15m',
-      );
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('✅ Widget updated with test data!\n\nCheck home screen widget now.'),
-            duration: Duration(seconds: 3),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ Widget error: $e\n\nMake sure:\n1. Widget added to home screen\n2. App rebuilt after adding widget files'),
-            duration: const Duration(seconds: 5),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
   Future<void> _checkNotifications() async {
     final pending = await NotificationService.getPendingNotifications();
+    final timerCount = NotificationService.getScheduledCount();
     if (!mounted) return;
 
     showDialog(
@@ -767,7 +545,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
           children: [
             const Text('Scheduled Notifications'),
             Text(
-              '${pending.length}',
+              '${pending.length + timerCount}',
               style: TextStyle(
                 fontSize: 16,
                 color: Colors.cyanAccent.shade400,

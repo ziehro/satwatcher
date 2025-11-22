@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:permission_handler/permission_handler.dart';
@@ -39,10 +40,7 @@ class NotificationService {
   }
 
   static Future<bool> requestPermissions() async {
-    // Request notification permission (Android 13+)
     final notificationStatus = await Permission.notification.request();
-
-    // Request exact alarm permission (Android 12+)
     final alarmStatus = await Permission.scheduleExactAlarm.request();
 
     if (!notificationStatus.isGranted) {
@@ -51,20 +49,20 @@ class NotificationService {
     }
 
     if (!alarmStatus.isGranted) {
-      print('Exact alarm permission denied');
-      return false;
+      print('Exact alarm permission denied - trying without');
+      // Continue anyway, will use fallback
     }
 
     return true;
   }
 
+  /// Schedule notification using zonedSchedule (may be blocked by Android)
   static Future<void> scheduleNotification(
       String title,
       String body,
       DateTime scheduledTime,
       ) async {
     try {
-      // NOTE: Cannot use const because title and scheduledTime are runtime values
       final androidDetails = AndroidNotificationDetails(
         'satellite_passes',
         'Satellite Passes',
@@ -77,12 +75,11 @@ class NotificationService {
         icon: '@mipmap/ic_launcher',
         showWhen: true,
         when: scheduledTime.millisecondsSinceEpoch,
-        usesChronometer: false,
         channelShowBadge: true,
         autoCancel: true,
-        ongoing: false,
         visibility: NotificationVisibility.public,
-        ticker: title,
+        fullScreenIntent: true,  // ADDED: May help trigger notification
+        category: AndroidNotificationCategory.alarm,  // ADDED: Treat as alarm
       );
 
       const iosDetails = DarwinNotificationDetails(
@@ -115,9 +112,22 @@ class NotificationService {
     }
   }
 
+  /// Schedule using Timer (works while app is open)
+  static Future<void> scheduleWithTimer(
+      String title,
+      String body,
+      Duration delay,
+      ) async {
+    print('⏱️ Setting Timer for ${delay.inSeconds} seconds...');
+
+    Timer(delay, () async {
+      print('⏱️ Timer fired! Showing notification...');
+      await showImmediateNotification(title, body);
+    });
+  }
+
+  /// Show notification immediately
   static Future<void> showImmediateNotification(String title, String body) async {
-    // Show notification immediately (for testing)
-    // NOTE: Cannot use const because title is a runtime value
     final androidDetails = AndroidNotificationDetails(
       'satellite_passes',
       'Satellite Passes',
@@ -129,7 +139,8 @@ class NotificationService {
       enableLights: true,
       icon: '@mipmap/ic_launcher',
       visibility: NotificationVisibility.public,
-      ticker: title,
+      fullScreenIntent: true,
+      category: AndroidNotificationCategory.alarm,
     );
 
     const iosDetails = DarwinNotificationDetails(
@@ -149,6 +160,8 @@ class NotificationService {
       body,
       details,
     );
+
+    print('✅ Immediate notification shown: $title');
   }
 
   static Future<void> cancelAllNotifications() async {
