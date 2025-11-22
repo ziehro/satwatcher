@@ -7,6 +7,9 @@ class NotificationService {
   static final FlutterLocalNotificationsPlugin _notifications =
   FlutterLocalNotificationsPlugin();
 
+  static final Map<int, Timer> _activeTimers = {};
+  static bool _exactAlarmPermitted = false;
+
   static Future<void> init() async {
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosSettings = DarwinInitializationSettings(
@@ -22,42 +25,67 @@ class NotificationService {
 
     await _notifications.initialize(settings);
 
-    // Create notification channel with MAX importance
-    const androidChannel = AndroidNotificationChannel(
-      'satellite_passes',
-      'Satellite Passes',
-      description: 'Notifications for upcoming satellite passes',
-      importance: Importance.max,
-      playSound: true,
-      enableVibration: true,
-      enableLights: true,
-      showBadge: true,
-    );
-
-    await _notifications
+    // Create notification channel for Android
+    _notifications
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(androidChannel);
+        ?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        'satellite_passes',
+        'Satellite Passes',
+        description: 'Notifications for upcoming satellite passes',
+        importance: Importance.max,
+        playSound: true,
+        enableVibration: true,
+        enableLights: true,
+        showBadge: true,
+      ),
+    );
   }
 
   static Future<bool> requestPermissions() async {
     final notificationStatus = await Permission.notification.request();
-    final alarmStatus = await Permission.scheduleExactAlarm.request();
-
     if (!notificationStatus.isGranted) {
       print('Notification permission denied');
       return false;
     }
 
-    if (!alarmStatus.isGranted) {
-      print('Exact alarm permission denied - trying without');
-      // Continue anyway, will use fallback
+    final alarmStatus = await Permission.scheduleExactAlarm.status;
+    if (alarmStatus.isGranted) {
+      _exactAlarmPermitted = true;
+    } else {
+      final requested = await Permission.scheduleExactAlarm.request();
+      _exactAlarmPermitted = requested.isGranted;
     }
 
+    print('Exact alarm permitted: $_exactAlarmPermitted');
     return true;
   }
 
-  /// Schedule notification using zonedSchedule (may be blocked by Android)
   static Future<void> scheduleNotification(
+      String title,
+      String body,
+      DateTime scheduledTime,
+      ) async {
+    final id = scheduledTime.millisecondsSinceEpoch ~/ 1000;
+    final delay = scheduledTime.difference(DateTime.now());
+
+    if (delay.isNegative) return;
+
+    _scheduleTimer(id, title, body, delay);
+    await _scheduleSystem(id, title, body, scheduledTime);
+  }
+
+  static void _scheduleTimer(int id, String title, String body, Duration delay) {
+    _activeTimers[id]?.cancel();
+    _activeTimers[id] = Timer(delay, () async {
+      await showImmediateNotification(title, body, id: id);
+      _activeTimers.remove(id);
+    });
+    print('Timer scheduled: $title in ${delay.inMinutes}m');
+  }
+
+  static Future<void> _scheduleSystem(
+      int id,
       String title,
       String body,
       DateTime scheduledTime,
@@ -71,15 +99,9 @@ class NotificationService {
         priority: Priority.max,
         playSound: true,
         enableVibration: true,
-        enableLights: true,
         icon: '@mipmap/ic_launcher',
-        showWhen: true,
-        when: scheduledTime.millisecondsSinceEpoch,
-        channelShowBadge: true,
-        autoCancel: true,
         visibility: NotificationVisibility.public,
-        fullScreenIntent: true,  // ADDED: May help trigger notification
-        category: AndroidNotificationCategory.alarm,  // ADDED: Treat as alarm
+        category: AndroidNotificationCategory.reminder,
       );
 
       const iosDetails = DarwinNotificationDetails(
@@ -88,46 +110,28 @@ class NotificationService {
         presentSound: true,
       );
 
-      final details = NotificationDetails(
-        android: androidDetails,
-        iOS: iosDetails,
-      );
-
-      final tzScheduledTime = tz.TZDateTime.from(scheduledTime, tz.local);
+      final details = NotificationDetails(android: androidDetails, iOS: iosDetails);
+      final tzTime = tz.TZDateTime.from(scheduledTime, tz.local);
 
       await _notifications.zonedSchedule(
-        scheduledTime.millisecondsSinceEpoch ~/ 1000,
+        id,
         title,
         body,
-        tzScheduledTime,
+        tzTime,
         details,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        androidScheduleMode: _exactAlarmPermitted
+            ? AndroidScheduleMode.exactAllowWhileIdle
+            : AndroidScheduleMode.inexactAllowWhileIdle,
         uiLocalNotificationDateInterpretation:
         UILocalNotificationDateInterpretation.absoluteTime,
       );
-
-      print('Scheduled notification for $title at $scheduledTime');
+      print('System scheduled: $title at $scheduledTime (exact: $_exactAlarmPermitted)');
     } catch (e) {
-      print('Error scheduling notification: $e');
+      print('System schedule failed: $e');
     }
   }
 
-  /// Schedule using Timer (works while app is open)
-  static Future<void> scheduleWithTimer(
-      String title,
-      String body,
-      Duration delay,
-      ) async {
-    print('⏱️ Setting Timer for ${delay.inSeconds} seconds...');
-
-    Timer(delay, () async {
-      print('⏱️ Timer fired! Showing notification...');
-      await showImmediateNotification(title, body);
-    });
-  }
-
-  /// Show notification immediately
-  static Future<void> showImmediateNotification(String title, String body) async {
+  static Future<void> showImmediateNotification(String title, String body, {int? id}) async {
     final androidDetails = AndroidNotificationDetails(
       'satellite_passes',
       'Satellite Passes',
@@ -136,11 +140,8 @@ class NotificationService {
       priority: Priority.max,
       playSound: true,
       enableVibration: true,
-      enableLights: true,
       icon: '@mipmap/ic_launcher',
       visibility: NotificationVisibility.public,
-      fullScreenIntent: true,
-      category: AndroidNotificationCategory.alarm,
     );
 
     const iosDetails = DarwinNotificationDetails(
@@ -149,32 +150,32 @@ class NotificationService {
       presentSound: true,
     );
 
-    final details = NotificationDetails(
-      android: androidDetails,
-      iOS: iosDetails,
-    );
-
+    final details = NotificationDetails(android: androidDetails, iOS: iosDetails);
     await _notifications.show(
-      DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      id ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
       title,
       body,
       details,
     );
-
-    print('✅ Immediate notification shown: $title');
-  }
-
-  static Future<void> cancelAllNotifications() async {
-    await _notifications.cancelAll();
-    print('Cancelled all notifications');
   }
 
   static Future<void> cancelNotification(int id) async {
+    _activeTimers[id]?.cancel();
+    _activeTimers.remove(id);
     await _notifications.cancel(id);
-    print('Cancelled notification with id: $id');
+  }
+
+  static Future<void> cancelAllNotifications() async {
+    for (var timer in _activeTimers.values) {
+      timer.cancel();
+    }
+    _activeTimers.clear();
+    await _notifications.cancelAll();
   }
 
   static Future<List<PendingNotificationRequest>> getPendingNotifications() async {
     return await _notifications.pendingNotificationRequests();
   }
+
+  static int getScheduledCount() => _activeTimers.length;
 }
