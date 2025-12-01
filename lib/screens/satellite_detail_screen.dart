@@ -43,26 +43,31 @@ class _SatelliteDetailScreenState extends State<SatelliteDetailScreen> {
   }
 
   void _updatePosition() {
-    final pos = SatelliteService.getCurrentPosition(
-      widget.pass.tle1,
-      widget.pass.tle2,
-      widget.pass.name,
-      widget.observerPosition,
-    );
-    if (mounted && pos.isNotEmpty) {
-      final elevation = pos['elevation'] ?? 0.0;
-      final range = pos['range'] ?? 20000.0;
-
-      final emf = SatelliteService.calculateEMFExposure(
-        widget.pass.category,
-        elevation,
-        range,
+    try {
+      final pos = SatelliteService.getCurrentPosition(
+        widget.pass.tle1,
+        widget.pass.tle2,
+        widget.pass.name,
+        widget.observerPosition,
       );
 
-      setState(() {
-        _currentPosition = pos;
-        _emfExposure = emf;
-      });
+      if (mounted && pos.isNotEmpty) {
+        final elevation = pos['elevation'] ?? -90.0;
+        final range = pos['range'] ?? 20000.0;
+
+        final emf = SatelliteService.calculateEMFExposure(
+          widget.pass.category,
+          elevation,
+          range,
+        );
+
+        setState(() {
+          _currentPosition = pos;
+          _emfExposure = emf;
+        });
+      }
+    } catch (e) {
+      print('Error updating position: $e');
     }
   }
 
@@ -91,6 +96,8 @@ class _SatelliteDetailScreenState extends State<SatelliteDetailScreen> {
     final timeUntil = widget.pass.start.difference(DateTime.now());
     final isActive = DateTime.now().isAfter(widget.pass.start) &&
         DateTime.now().isBefore(widget.pass.end);
+    final elevation = _currentPosition?['elevation'] ?? -90.0;
+    final isVisible = elevation > 0;
 
     return Scaffold(
       appBar: AppBar(
@@ -138,10 +145,53 @@ class _SatelliteDetailScreenState extends State<SatelliteDetailScreen> {
                 ),
               if (isActive) const SizedBox(height: 16),
 
+              // Visibility Status
+              if (!isVisible && _currentPosition != null) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade800.withOpacity(0.5),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.visibility_off, color: Colors.grey.shade400, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'BELOW HORIZON',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                                color: Colors.grey.shade300,
+                              ),
+                            ),
+                            Text(
+                              'Elevation: ${elevation.toStringAsFixed(1)}° (needs > 0° for EMF exposure)',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade400,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+
               // EMF Exposure Card
               if (_emfExposure != null) ...[
                 Card(
-                  color: Colors.red.shade900.withOpacity(0.2),
+                  color: isVisible
+                      ? Colors.red.shade900.withOpacity(0.2)
+                      : Colors.grey.shade800.withOpacity(0.2),
                   child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: Column(
@@ -149,11 +199,16 @@ class _SatelliteDetailScreenState extends State<SatelliteDetailScreen> {
                       children: [
                         Row(
                           children: [
-                            Icon(Icons.warning_amber, color: _getExposureColor(_emfExposure!['percentOfLimit'])),
+                            Icon(
+                              isVisible ? Icons.warning_amber : Icons.info_outline,
+                              color: isVisible
+                                  ? _getExposureColor(_emfExposure!['percentOfLimit'])
+                                  : Colors.grey.shade500,
+                            ),
                             const SizedBox(width: 8),
-                            const Text(
-                              'Current EMF Exposure',
-                              style: TextStyle(
+                            Text(
+                              isVisible ? 'Current EMF Exposure' : 'Predicted Peak EMF',
+                              style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -164,41 +219,59 @@ class _SatelliteDetailScreenState extends State<SatelliteDetailScreen> {
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: _getExposureColor(_emfExposure!['percentOfLimit']).withOpacity(0.2),
+                            color: isVisible
+                                ? _getExposureColor(_emfExposure!['percentOfLimit']).withOpacity(0.2)
+                                : Colors.grey.shade700.withOpacity(0.2),
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(
-                              color: _getExposureColor(_emfExposure!['percentOfLimit']),
+                              color: isVisible
+                                  ? _getExposureColor(_emfExposure!['percentOfLimit'])
+                                  : Colors.grey.shade600,
                               width: 2,
                             ),
                           ),
                           child: Column(
                             children: [
                               Text(
-                                '${_emfExposure!['exposureMicrowatts'].toStringAsFixed(3)} µW/cm²',
-                                style: const TextStyle(
-                                  fontSize: 24,
+                                isVisible
+                                    ? '${_emfExposure!['exposureMicrowatts'].toStringAsFixed(3)} µW/cm²'
+                                    : 'Not visible (${elevation.toStringAsFixed(1)}° elevation)',
+                                style: TextStyle(
+                                  fontSize: isVisible ? 24 : 16,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '${_emfExposure!['percentOfLimit'].toStringAsFixed(4)}% of safety limit',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey.shade400,
+                              if (isVisible) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  '${_emfExposure!['percentOfLimit'].toStringAsFixed(4)}% of safety limit',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade400,
+                                  ),
                                 ),
-                              ),
+                              ],
                             ],
                           ),
                         ),
                         const SizedBox(height: 12),
-                        Text(
-                          'Safety Limit: 10,000 µW/cm² (ICNIRP)',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey.shade500,
+                        if (!isVisible)
+                          Text(
+                            'EMF exposure only occurs when satellite is above horizon (elevation > 0°)',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey.shade500,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          )
+                        else
+                          Text(
+                            'Safety Limit: 10,000 µW/cm² (ICNIRP)',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey.shade500,
+                            ),
                           ),
-                        ),
                       ],
                     ),
                   ),
@@ -236,7 +309,9 @@ class _SatelliteDetailScreenState extends State<SatelliteDetailScreen> {
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                               decoration: BoxDecoration(
-                                color: _getExposureColor(_emfExposure!['percentOfLimit']),
+                                color: isVisible
+                                    ? _getExposureColor(_emfExposure!['percentOfLimit'])
+                                    : Colors.grey.shade600,
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
@@ -320,7 +395,10 @@ class _SatelliteDetailScreenState extends State<SatelliteDetailScreen> {
                         _buildInfoRow('Latitude', '${_currentPosition!['latitude']?.toStringAsFixed(4)}°'),
                         _buildInfoRow('Longitude', '${_currentPosition!['longitude']?.toStringAsFixed(4)}°'),
                         _buildInfoRow('Altitude', '${_currentPosition!['altitude']?.toStringAsFixed(2)} km'),
-                        _buildInfoRow('Elevation', '${_currentPosition!['elevation']?.toStringAsFixed(1)}°'),
+                        _buildInfoRow(
+                            'Elevation',
+                            '${_currentPosition!['elevation']?.toStringAsFixed(1)}°${isVisible ? " ✓ Visible" : " ✗ Below horizon"}'
+                        ),
                         _buildInfoRow('Azimuth', '${_currentPosition!['azimuth']?.toStringAsFixed(1)}° (${_getDirection(_currentPosition!['azimuth'] ?? 0)})'),
                         _buildInfoRow('Range', '${_currentPosition!['range']?.toStringAsFixed(2)} km'),
                       ],

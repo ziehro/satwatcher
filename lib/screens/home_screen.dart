@@ -35,6 +35,19 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
   double _totalEMFExposure = 0.0;
   int _activePassCount = 0;
 
+  // Country/Organization mapping
+  static const Map<String, String> satelliteCountry = {
+    'GPS-OPS': '🇺🇸 USA',
+    'GALILEO': '🇪🇺 EU',
+    'BEIDOU': '🇨🇳 China',
+    'GLONASS-OPS': '🇷🇺 Russia',
+    'GOES': '🇺🇸 USA',
+    'TDRSS': '🇺🇸 USA',
+    'SARSAT': '🌍 International',
+    'RADAR': '🌍 Various',
+    'MUSSON': '🇷🇺 Russia',
+  };
+
   @override
   void initState() {
     super.initState();
@@ -63,17 +76,17 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     _updateTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
       if (mounted) {
         _calculateLiveEMF();
-        setState(() {});
       }
     });
-    // Calculate immediately
     _calculateLiveEMF();
   }
 
   void _calculateLiveEMF() {
     if (_currentPosition == null || _passes.isEmpty) {
-      _totalEMFExposure = 0.0;
-      _activePassCount = 0;
+      setState(() {
+        _totalEMFExposure = 0.0;
+        _activePassCount = 0;
+      });
       return;
     }
 
@@ -83,7 +96,6 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     String nextPassInfo = "No upcoming passes";
 
     for (var pass in _passes) {
-      // Check if satellite is currently overhead
       if (now.isAfter(pass.start) && now.isBefore(pass.end)) {
         try {
           final pos = SatelliteService.getCurrentPosition(
@@ -94,7 +106,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
           );
 
           if (pos.isNotEmpty) {
-            final elevation = pos['elevation'] ?? 0.0;
+            final elevation = pos['elevation'] ?? -90.0;
             final range = pos['range'] ?? 20000.0;
 
             if (elevation > 0) {
@@ -103,12 +115,16 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
                 elevation,
                 range,
               );
-              totalExposure += emf['exposureMicrowatts'];
-              activeCount++;
+              final exposure = emf['exposureMicrowatts'] ?? 0.0;
+              if (exposure > 0) {
+                totalExposure += exposure;
+                activeCount++;
+                print('Active: ${pass.name} - Elev: ${elevation.toStringAsFixed(1)}° - EMF: ${exposure.toStringAsFixed(3)} µW/cm²');
+              }
             }
           }
         } catch (e) {
-          // Skip this satellite
+          print('Error calculating EMF for ${pass.name}: $e');
         }
       }
     }
@@ -131,7 +147,6 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       _activePassCount = activeCount;
     });
 
-    // Update widget
     final percentOfLimit = (totalExposure / 10000.0) * 100;
     WidgetService.updateWidget(
       emfValue: totalExposure,
@@ -158,7 +173,6 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       });
     } catch (e) {
       print('Error loading preferences: $e');
-      // Use defaults if loading fails
     }
   }
 
@@ -177,7 +191,6 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       await prefs.setInt('hoursAhead', _hoursAhead);
     } catch (e) {
       print('Error saving preferences: $e');
-      // Don't block the UI - just log the error
     }
   }
 
@@ -199,7 +212,6 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
         final List<dynamic> decoded = jsonDecode(passesJson);
         final passes = decoded.map((e) => SatellitePass.fromJson(e)).toList();
 
-        // Filter out expired passes
         final now = DateTime.now();
         final validPasses = passes.where((p) => p.end.isAfter(now)).toList();
 
@@ -221,14 +233,12 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
             _statusMessage = 'Loaded ${validPasses.length} stored passes';
           });
 
-          // Reschedule notifications for loaded passes (don't await)
           _scheduleNotifications(validPasses);
           _startUpdateTimer();
         }
       }
     } catch (e) {
       print('Error loading stored passes: $e');
-      // Don't block the UI - just log the error
     }
   }
 
@@ -251,7 +261,6 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       }
     } catch (e) {
       print('Error saving stored passes: $e');
-      // Don't block the UI - just log the error
     }
   }
 
@@ -412,7 +421,6 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
   }
 
   void _scheduleNotifications(List<SatellitePass> passes) {
-    // Schedule in background - don't block UI
     Future.microtask(() async {
       try {
         for (var pass in passes.take(20)) {
@@ -434,7 +442,6 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       }
     });
   }
-
 
   List<SatellitePass> get _filteredPasses {
     return _passes.where((pass) {
@@ -474,14 +481,16 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
           ),
         ),
         child: SafeArea(
-          child: Column(
-            children: [
-              _buildHeader(),
-              _buildRadarAnimation(),
-              _buildLiveEMFDisplay(),
-              _buildFilters(),
-              Expanded(child: _buildPassList()),
-            ],
+          child: SingleChildScrollView(
+            child: Column(
+              children: [
+                _buildHeader(),
+                _buildRadarAnimation(),
+                _buildLiveEMFDisplay(),
+                _buildFilters(),
+                _buildPassList(),
+              ],
+            ),
           ),
         ),
       ),
@@ -568,7 +577,6 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
             itemCount: pending.length,
             itemBuilder: (context, index) {
               final notification = pending[index];
-              // Convert notification ID back to timestamp
               final scheduledTime = DateTime.fromMillisecondsSinceEpoch(
                 notification.id * 1000,
               );
@@ -624,7 +632,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
                         notification.id,
                       );
                       Navigator.pop(context);
-                      _checkNotifications(); // Refresh the dialog
+                      _checkNotifications();
                     },
                   ),
                 ),
@@ -908,9 +916,9 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
 
   Widget _buildPassList() {
     if (_filteredPasses.isEmpty) {
-      return Center(
+      return Padding(
+        padding: const EdgeInsets.all(32.0),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(Icons.satellite_alt, size: 64, color: Colors.grey.shade700),
             const SizedBox(height: 16),
@@ -925,132 +933,145 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
       );
     }
 
-    return ListView.builder(
+    return Padding(
       padding: const EdgeInsets.all(16),
-      itemCount: _filteredPasses.length,
-      itemBuilder: (context, index) {
-        final pass = _filteredPasses[index];
-        final timeUntil = pass.start.difference(DateTime.now());
-        final isImminent = timeUntil.inMinutes < 30;
+      child: Column(
+        children: _filteredPasses.map((pass) {
+          final timeUntil = pass.start.difference(DateTime.now());
+          final isImminent = timeUntil.inMinutes < 30;
+          final country = satelliteCountry[pass.category] ?? '🌍 Unknown';
 
-        return GestureDetector(
-          onTap: () {
-            if (_currentPosition != null) {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => SatelliteDetailScreen(
-                    pass: pass,
-                    observerPosition: _currentPosition!,
-                  ),
-                ),
-              );
-            }
-          },
-          child: Card(
-            color: isImminent
-                ? Colors.red.shade900.withOpacity(0.3)
-                : Colors.white.withOpacity(0.1),
-            margin: const EdgeInsets.only(bottom: 12),
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: _getPowerColor(pass.power),
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          pass.name,
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      const Icon(Icons.chevron_right),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    pass.category,
-                    style: TextStyle(
-                      color: Colors.cyanAccent.shade400,
-                      fontSize: 12,
+          return GestureDetector(
+            onTap: () {
+              if (_currentPosition != null) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => SatelliteDetailScreen(
+                      pass: pass,
+                      observerPosition: _currentPosition!,
                     ),
                   ),
-                  const Divider(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            DateFormat('MMM dd, hh:mm a').format(pass.start),
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+                );
+              }
+            },
+            child: Card(
+              color: isImminent
+                  ? Colors.red.shade900.withOpacity(0.3)
+                  : Colors.white.withOpacity(0.1),
+              margin: const EdgeInsets.only(bottom: 12),
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: _getPowerColor(pass.power),
+                            shape: BoxShape.circle,
                           ),
-                          Text(
-                            timeUntil.inMinutes < 60
-                                ? 'in ${timeUntil.inMinutes}m'
-                                : 'in ${timeUntil.inHours}h ${timeUntil.inMinutes % 60}m',
-                            style: TextStyle(
-                              color: isImminent
-                                  ? Colors.red.shade300
-                                  : Colors.grey.shade400,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            '${pass.maxElevation.toStringAsFixed(1)}°',
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            pass.name,
                             style: const TextStyle(
-                              fontSize: 18,
+                              fontSize: 16,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
-                          Text(
-                            _getDirection(pass.azimuth),
-                            style: TextStyle(
-                              color: Colors.grey.shade400,
-                              fontSize: 12,
-                            ),
+                        ),
+                        const Icon(Icons.chevron_right),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Text(
+                          pass.category,
+                          style: TextStyle(
+                            color: Colors.cyanAccent.shade400,
+                            fontSize: 12,
                           ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  LinearProgressIndicator(
-                    value: pass.power / 5.0,
-                    backgroundColor: Colors.grey.shade800,
-                    valueColor:
-                    AlwaysStoppedAnimation(_getPowerColor(pass.power)),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'EMF Power: ${pass.power.toStringAsFixed(1)}/5.0',
-                    style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
-                  ),
-                ],
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          country,
+                          style: TextStyle(
+                            color: Colors.grey.shade400,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const Divider(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              DateFormat('MMM dd, hh:mm a').format(pass.start),
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            Text(
+                              timeUntil.inMinutes < 60
+                                  ? 'in ${timeUntil.inMinutes}m'
+                                  : 'in ${timeUntil.inHours}h ${timeUntil.inMinutes % 60}m',
+                              style: TextStyle(
+                                color: isImminent
+                                    ? Colors.red.shade300
+                                    : Colors.grey.shade400,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              '${pass.maxElevation.toStringAsFixed(1)}°',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              _getDirection(pass.azimuth),
+                              style: TextStyle(
+                                color: Colors.grey.shade400,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    LinearProgressIndicator(
+                      value: pass.power / 5.0,
+                      backgroundColor: Colors.grey.shade800,
+                      valueColor:
+                      AlwaysStoppedAnimation(_getPowerColor(pass.power)),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'EMF Power: ${pass.power.toStringAsFixed(1)}/5.0',
+                      style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-        );
-      },
+          );
+        }).toList(),
+      ),
     );
   }
 }
