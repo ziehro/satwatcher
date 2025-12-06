@@ -356,6 +356,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     }
   }
 
+  // Replace the _loadSatellites method in lib/screens/home_screen.dart
   Future<void> _loadSatellites() async {
     if (_currentPosition == null) {
       await _getCurrentLocation();
@@ -364,30 +365,63 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
 
     setState(() {
       _isLoading = true;
+      _statusMessage = 'Checking permissions...';
+    });
+
+    // Check permissions
+    final permissions = await NotificationService.checkPermissions();
+
+    if (!permissions['notifications']! || !permissions['canSchedule']!) {
+      if (!mounted) return;
+
+      final shouldContinue = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('Permissions Required'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (!permissions['notifications']!)
+                const Text('• Notification permission is required\n'),
+              if (!permissions['canSchedule']!)
+                const Text('• Exact alarm permission is required for timely notifications\n\nYou will be taken to Settings to enable "Alarms & reminders"'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () async {
+                await NotificationService.requestPermissions();
+                Navigator.pop(context, true);
+              },
+              child: const Text('Grant Permission'),
+            ),
+          ],
+        ),
+      );
+
+      if (shouldContinue != true) {
+        setState(() {
+          _isLoading = false;
+          _statusMessage = 'Permissions denied';
+        });
+        return;
+      }
+    }
+
+    setState(() {
       _statusMessage = 'Loading satellites...';
     });
 
-    final permissionsGranted = await NotificationService.requestPermissions();
-    if (!permissionsGranted && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Notification permissions required for alerts'),
-          duration: Duration(seconds: 10),
-        ),
-      );
-    }
-
     try {
       final categories = [
-        'radar',
-        'gps-ops',
-        'galileo',
-        'beidou',
-        'glonass-ops',
-        'tdrss',
-        'sarsat',
-        'goes',
-        'musson'
+        'radar', 'gps-ops', 'galileo', 'beidou', 'glonass-ops',
+        'tdrss', 'sarsat', 'goes', 'musson'
       ];
 
       List<SatelliteData> allSatellites = [];
@@ -541,9 +575,11 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
     );
   }
 
+  // In lib/screens/home_screen.dart - Replace the _checkNotifications method
+
   Future<void> _checkNotifications() async {
-    final pending = await NotificationService.getPendingNotifications();
-    final timerCount = NotificationService.getScheduledCount();
+    final scheduledAlarms = await NotificationService.getScheduledAlarms();
+
     if (!mounted) return;
 
     showDialog(
@@ -554,7 +590,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
           children: [
             const Text('Scheduled Notifications'),
             Text(
-              '${pending.length + timerCount}',
+              '${scheduledAlarms.length}',
               style: TextStyle(
                 fontSize: 16,
                 color: Colors.cyanAccent.shade400,
@@ -564,7 +600,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
         ),
         content: SizedBox(
           width: double.maxFinite,
-          child: pending.isEmpty
+          child: scheduledAlarms.isEmpty
               ? const Padding(
             padding: EdgeInsets.all(16.0),
             child: Text(
@@ -574,13 +610,10 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
           )
               : ListView.builder(
             shrinkWrap: true,
-            itemCount: pending.length,
+            itemCount: scheduledAlarms.length,
             itemBuilder: (context, index) {
-              final notification = pending[index];
-              final scheduledTime = DateTime.fromMillisecondsSinceEpoch(
-                notification.id * 1000,
-              );
-              final timeUntil = scheduledTime.difference(DateTime.now());
+              final alarm = scheduledAlarms[index];
+              final timeUntil = alarm.scheduledTime.difference(DateTime.now());
 
               return Card(
                 margin: const EdgeInsets.only(bottom: 8),
@@ -590,7 +623,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
                     vertical: 4,
                   ),
                   title: Text(
-                    notification.title ?? 'Unknown',
+                    alarm.title,
                     style: const TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.bold,
@@ -603,7 +636,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
                     children: [
                       const SizedBox(height: 4),
                       Text(
-                        DateFormat('MMM dd, hh:mm a').format(scheduledTime),
+                        DateFormat('MMM dd, hh:mm a').format(alarm.scheduledTime),
                         style: TextStyle(
                           fontSize: 12,
                           color: Colors.cyanAccent.shade400,
@@ -628,9 +661,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
                     icon: const Icon(Icons.delete, size: 20),
                     color: Colors.red.shade400,
                     onPressed: () async {
-                      await NotificationService.cancelNotification(
-                        notification.id,
-                      );
+                      await NotificationService.cancelNotification(alarm.id);
                       Navigator.pop(context);
                       _checkNotifications();
                     },
@@ -641,7 +672,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
           ),
         ),
         actions: [
-          if (pending.isNotEmpty)
+          if (scheduledAlarms.isNotEmpty)
             TextButton.icon(
               onPressed: () async {
                 final confirm = await showDialog<bool>(
@@ -649,7 +680,7 @@ class _SatelliteTrackerHomeState extends State<SatelliteTrackerHome>
                   builder: (context) => AlertDialog(
                     title: const Text('Delete All Notifications?'),
                     content: Text(
-                      'This will cancel all ${pending.length} scheduled notifications.',
+                      'This will cancel all ${scheduledAlarms.length} scheduled notifications.',
                     ),
                     actions: [
                       TextButton(
